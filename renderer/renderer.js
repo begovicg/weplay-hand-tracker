@@ -39,6 +39,8 @@ const tabContents = {
   hands: document.getElementById('tabHands'),
   graph: document.getElementById('tabGraph'),
 };
+const hudHeroLabel = document.getElementById('hudHeroLabel');
+const hudTable = document.getElementById('hudTable');
 const advancedGraphLabel = document.getElementById('advancedGraphLabel');
 const advancedGraphChart = document.getElementById('advancedGraphChart');
 const legendTotal = document.getElementById('legendTotal');
@@ -597,9 +599,26 @@ async function refreshFilterOptions() {
 async function refreshStats() {
   const payload = await window.weplayConverter.getPersistentStats(externalFilters);
   renderStats(payload);
+  renderHudTable(payload.stats);
   renderAdvancedGraph(payload.stats.handTimeline, externalFilters.wentToShowdown);
 }
 
+// Whichever stake bucket (from aggregateStats' byStake) has the most hands —
+// "Home" in the Player Overview sense: the stake this player actually
+// grinds, not just whatever the current filter happens to be scoped to.
+function homeStakesLabel(byStake) {
+  let best = null;
+  for (const bucket of Object.values(byStake || {})) {
+    if (!best || bucket.hands > best.hands) best = bucket;
+  }
+  return best ? best.stakesLabel : null;
+}
+
+// Player Overview: a compact, at-a-glance summary — the same 9 headline
+// numbers Dojson's HUD shows at the bottom of its player-lookup view, plus
+// the results-over-time chart. The full stat breakdown lives in the
+// Advanced Stats tab's HUD table (see renderHudTable) instead of being
+// dumped here too.
 function renderStats(payload) {
   const { stats, excludedCount, evBb100, evAdjustedHandCount } = payload;
 
@@ -616,37 +635,14 @@ function renderStats(payload) {
   }
 
   statsCards.appendChild(statCard('Hands', stats.hands.toLocaleString(), '', 'matching current filters'));
-  statsCards.appendChild(statCard('Net Result', fmtMoney(stats.netResult), moneyClass(stats.netResult)));
-  statsCards.appendChild(statCard('Winrate', stats.bb100 != null ? `${stats.bb100.toFixed(1)} bb/100` : '—', moneyClass(stats.bb100)));
-  statsCards.appendChild(statCard('EV Winrate', evBb100 != null ? `${evBb100.toFixed(1)} bb/100` : '—', moneyClass(evBb100), evAdjustedHandCount ? `${evAdjustedHandCount} all-in adj.` : 'no all-ins yet'));
+  statsCards.appendChild(statCard('Winnings', fmtMoney(stats.netResult), moneyClass(stats.netResult)));
   statsCards.appendChild(statCard('VPIP', fmtPct(stats.vpip), '', `${stats.nonBombPotHands} hands`));
+  statsCards.appendChild(statCard('Home', homeStakesLabel(stats.byStake) || '—', ''));
+  statsCards.appendChild(statCard('Winrate', stats.bb100 != null ? `${stats.bb100.toFixed(1)} bb/100` : '—', moneyClass(stats.bb100)));
   statsCards.appendChild(statCard('PFR', fmtPct(stats.pfr), ''));
-  statsCards.appendChild(statCard('RFI', fmtPct(stats.rfi), '', `${stats.rfiOppCount} opps`));
-  statsCards.appendChild(statCard('Limp', fmtPct(stats.limp), ''));
-  statsCards.appendChild(statCard('Cold Call', fmtPct(stats.coldCall), '', `${stats.coldCallOppCount} opps`));
-  statsCards.appendChild(statCard('3-Bet', fmtPct(stats.threeBet), '', `${stats.threeBetOppCount} opps`));
-  statsCards.appendChild(statCard('Fold to 3-Bet', fmtPct(stats.foldToThreeBet), ''));
-  statsCards.appendChild(statCard('4-Bet', fmtPct(stats.fourBet), '', `${stats.fourBetOppCount} opps`));
-  statsCards.appendChild(statCard('Fold to 4-Bet', fmtPct(stats.foldToFourBet), '', `${stats.foldToFourBetOppCount} opps`));
-  statsCards.appendChild(statCard('Squeeze', fmtPct(stats.squeeze), '', `${stats.squeezeOppCount} opps`));
-  statsCards.appendChild(statCard('Attempt to Steal', fmtPct(stats.attemptSteal), '', `${stats.stealOppCount} opps`));
-  statsCards.appendChild(statCard('Fold to Steal', fmtPct(stats.foldToSteal), '', `${stats.foldToStealOppCount} opps`));
-  statsCards.appendChild(statCard('WTSD', fmtPct(stats.wtsd), ''));
-  statsCards.appendChild(statCard('W$SD', fmtPct(stats.wonAtShowdown), '', 'at showdown'));
-  statsCards.appendChild(statCard('W$WSF', fmtPct(stats.wonWhenSawFlop), '', 'saw flop'));
-  statsCards.appendChild(statCard('Aggression Factor', stats.aggressionFactor != null ? stats.aggressionFactor.toFixed(2) : '—', '', 'postflop'));
-  statsCards.appendChild(statCard('Flop Aggression', fmtPct(stats.flopAggression), '', `${stats.flopAggressionOpportunities} opps`));
-  statsCards.appendChild(statCard('Turn Aggression', fmtPct(stats.turnAggression), '', `${stats.turnAggressionOpportunities} opps`));
-  statsCards.appendChild(statCard('River Aggression', fmtPct(stats.riverAggression), '', `${stats.riverAggressionOpportunities} opps`));
-  statsCards.appendChild(statCard('Flop C-Bet', fmtPct(stats.flopCbet), '', `${stats.flopCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('Turn C-Bet', fmtPct(stats.turnCbet), '', `${stats.turnCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('River C-Bet', fmtPct(stats.riverCbet), '', `${stats.riverCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('Fold to Flop C-Bet', fmtPct(stats.flopFoldToCbet), '', `${stats.flopFoldToCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('Fold to Turn C-Bet', fmtPct(stats.turnFoldToCbet), '', `${stats.turnFoldToCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('Fold to River C-Bet', fmtPct(stats.riverFoldToCbet), '', `${stats.riverFoldToCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('Flop Check-Raise', fmtPct(stats.flopCheckRaise), '', `${stats.flopCheckRaiseOpportunities} opps`));
-  statsCards.appendChild(statCard('Turn Check-Raise', fmtPct(stats.turnCheckRaise), '', `${stats.turnCheckRaiseOpportunities} opps`));
-  statsCards.appendChild(statCard('River Check-Raise', fmtPct(stats.riverCheckRaise), '', `${stats.riverCheckRaiseOpportunities} opps`));
+  statsCards.appendChild(statCard('WWSF', fmtPct(stats.wonWhenSawFlop), '', 'saw flop'));
+  statsCards.appendChild(statCard('Expected V', evBb100 != null ? `${evBb100.toFixed(1)} bb/100` : '—', moneyClass(evBb100), evAdjustedHandCount ? `${evAdjustedHandCount} all-in adj.` : 'no all-ins yet'));
+  statsCards.appendChild(statCard('3Bet', fmtPct(stats.threeBet), '', `${stats.threeBetOppCount} opps`));
   if (stats.bombPotHands > 0) {
     statsCards.appendChild(statCard('Bomb Pot Hands', String(stats.bombPotHands), '', 'excluded above'));
   }
@@ -666,6 +662,102 @@ function renderStats(payload) {
   caveatParts.push('WTSD only counts a genuine multi-way contest (2+ players still active when the showdown is reached) — Weplay shows the same header text even for an uncontested fold-out, which is excluded here.');
   caveatParts.push('EV Winrate only adjusts genuine 2-player all-in-with-cards-to-come hands (both hands shown at showdown) — multi-way all-ins keep their actual result for now, since that needs separate per-opponent side-pot equity math. Equity is computed exactly for turn/river all-ins, and via Monte Carlo sampling (10,000 trials, ~0.4 percentage points of statistical noise) for preflop/flop all-ins, where exact enumeration would mean up to ~1.7 million board combinations per hand.');
   statsCaveat.textContent = caveatParts.join(' ');
+}
+
+// ── Advanced Stats: HUD table ────────────────────────────────────────────
+// A Dojson-HUD-style grouped breakdown of every stat stats.js computes,
+// built from the exact same payload.stats refreshStats() already fetched —
+// no separate IPC call. Grouped into labeled sections (rather than Dojson's
+// multiple clickable sub-tabs) since this app doesn't have Dojson's extra
+// dimensions yet (IP/OOP, SRP-vs-3-bet-pot splits, site/format breakdowns —
+// all need the position-aware engine work intentionally deferred to a later
+// round). Row labels are tinted the way Dojson tints its own rows: green
+// for a proactive/aggressive action, orange for a "folded to X" one — a
+// quick visual read of "is this a stat about doing something, or giving up."
+
+function hudRow(label, value, count, kind) {
+  return { label, value, count, kind };
+}
+
+function renderHudTable(stats) {
+  hudHeroLabel.textContent = stats.hands > 0
+    ? `${stats.hands.toLocaleString()} hand${stats.hands === 1 ? '' : 's'} matching current filters`
+    : 'No hands match the current filters';
+
+  if (stats.hands === 0) {
+    hudTable.innerHTML = '<p class="hero-note">Import hands, or try Reset filters.</p>';
+    return;
+  }
+
+  const groups = [
+    {
+      title: 'Preflop',
+      rows: [
+        hudRow('VPIP', fmtPct(stats.vpip), stats.nonBombPotHands, 'pos'),
+        hudRow('PFR', fmtPct(stats.pfr), null, 'pos'),
+        hudRow('RFI', fmtPct(stats.rfi), stats.rfiOppCount, 'pos'),
+        hudRow('Limp', fmtPct(stats.limp), null, 'neutral'),
+        hudRow('Cold Call', fmtPct(stats.coldCall), stats.coldCallOppCount, 'neutral'),
+        hudRow('3-Bet', fmtPct(stats.threeBet), stats.threeBetOppCount, 'pos'),
+        hudRow('Fold to 3-Bet', fmtPct(stats.foldToThreeBet), null, 'neg'),
+        hudRow('4-Bet', fmtPct(stats.fourBet), stats.fourBetOppCount, 'pos'),
+        hudRow('Fold to 4-Bet', fmtPct(stats.foldToFourBet), stats.foldToFourBetOppCount, 'neg'),
+        hudRow('Squeeze', fmtPct(stats.squeeze), stats.squeezeOppCount, 'pos'),
+      ],
+    },
+    {
+      title: 'Steal',
+      rows: [
+        hudRow('Attempt to Steal', fmtPct(stats.attemptSteal), stats.stealOppCount, 'pos'),
+        hudRow('Fold to Steal', fmtPct(stats.foldToSteal), stats.foldToStealOppCount, 'neg'),
+      ],
+    },
+    {
+      title: 'C-Bet',
+      rows: [
+        hudRow('Flop C-Bet', fmtPct(stats.flopCbet), stats.flopCbetOpportunities, 'pos'),
+        hudRow('Turn C-Bet', fmtPct(stats.turnCbet), stats.turnCbetOpportunities, 'pos'),
+        hudRow('River C-Bet', fmtPct(stats.riverCbet), stats.riverCbetOpportunities, 'pos'),
+        hudRow('Fold to Flop C-Bet', fmtPct(stats.flopFoldToCbet), stats.flopFoldToCbetOpportunities, 'neg'),
+        hudRow('Fold to Turn C-Bet', fmtPct(stats.turnFoldToCbet), stats.turnFoldToCbetOpportunities, 'neg'),
+        hudRow('Fold to River C-Bet', fmtPct(stats.riverFoldToCbet), stats.riverFoldToCbetOpportunities, 'neg'),
+      ],
+    },
+    {
+      title: 'Check-Raise',
+      rows: [
+        hudRow('Flop Check-Raise', fmtPct(stats.flopCheckRaise), stats.flopCheckRaiseOpportunities, 'pos'),
+        hudRow('Turn Check-Raise', fmtPct(stats.turnCheckRaise), stats.turnCheckRaiseOpportunities, 'pos'),
+        hudRow('River Check-Raise', fmtPct(stats.riverCheckRaise), stats.riverCheckRaiseOpportunities, 'pos'),
+      ],
+    },
+    {
+      title: 'Aggression & Showdown',
+      rows: [
+        hudRow('Aggression Factor', stats.aggressionFactor != null ? stats.aggressionFactor.toFixed(2) : '—', null, 'neutral'),
+        hudRow('Flop Aggression', fmtPct(stats.flopAggression), stats.flopAggressionOpportunities, 'pos'),
+        hudRow('Turn Aggression', fmtPct(stats.turnAggression), stats.turnAggressionOpportunities, 'pos'),
+        hudRow('River Aggression', fmtPct(stats.riverAggression), stats.riverAggressionOpportunities, 'pos'),
+        hudRow('WTSD', fmtPct(stats.wtsd), null, 'neutral'),
+        hudRow('W$SD', fmtPct(stats.wonAtShowdown), null, 'neutral'),
+        hudRow('W$WSF', fmtPct(stats.wonWhenSawFlop), null, 'neutral'),
+      ],
+    },
+  ];
+
+  hudTable.innerHTML = groups.map((g) => `
+    <div class="hud-group">
+      <h3 class="hud-group-title">${escapeHtml(g.title)}</h3>
+      <div class="hud-rows">
+        ${g.rows.map((r) => `
+          <div class="hud-row">
+            <span class="hud-row-label hud-${r.kind}">${escapeHtml(r.label)}</span>
+            <span class="hud-row-value">${r.value}${r.count != null ? `<span class="hud-row-count">${r.count}</span>` : ''}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
 }
 
 function buildTimelineChartSvg(timeline) {

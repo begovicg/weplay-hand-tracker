@@ -508,9 +508,11 @@ main {
   margin-bottom: 20px;
 }
 
-/* Advanced Graph tab — the same underlying timeline data as the small
-   chart in the Hands tab, just given a whole tab's worth of space instead
-   of sharing a row with stat cards. See renderer.js's buildAdvancedTimelineChartSvg. */
+/* Advanced Stats tab — the HUD table (below) is the tab's actual content
+   now; this chart is supporting context underneath it, so it gets less
+   vertical space than when it had the whole tab to itself. Still the same
+   underlying timeline data as the small chart in the Player Overview tab.
+   See renderer.js's buildAdvancedTimelineChartSvg. */
 .advanced-graph-section {
   background: var(--bg-panel);
   border: 1px solid var(--border-soft);
@@ -520,8 +522,84 @@ main {
 
 .advanced-graph-chart {
   width: 100%;
-  height: 65vh;
-  min-height: 440px;
+  height: 40vh;
+  min-height: 320px;
+}
+
+/* Advanced Stats tab — HUD table: a Dojson-HUD-style grouped breakdown of
+   every stat stats.js computes. See renderer.js's renderHudTable. */
+.hud-section {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 20px;
+}
+
+.hud-table {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+.hud-group {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+.hud-group-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.hud-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hud-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.hud-row-label {
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Proactive/aggressive actions read green, "folded to X" actions read
+   orange — a quick visual read of doing something vs. giving up, matching
+   the reference HUD this table is modeled on. Stats that are neither (raw
+   showdown/aggression ratios) stay the default text color. */
+.hud-row-label.hud-pos { color: var(--ok); }
+.hud-row-label.hud-neg { color: var(--warn); }
+
+.hud-row-value {
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hud-row-count {
+  margin-left: 5px;
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--text-faint);
+  vertical-align: super;
 }
 
 .graph-legend {

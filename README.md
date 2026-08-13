@@ -98,7 +98,7 @@ is what most people expect.
 The app has two tabs — **Hands** and **Import Hands**. **Hands** (the
 default, and the primary way to use the app day-to-day) is a single merged
 page: your persistent database, filters, a stats overview, and the hands
-table all together — see "Hands & Stats" below for how those fit together.
+table all together — see "Player Overview & Advanced Stats" below for how those fit together.
 **Import Hands** (last, since it matters less day-to-day now that the
 database exists) is where the drag/drop area, Browse, Convert & Save, and
 Import to Hand Database live — kept on its own tab so it doesn't clutter
@@ -161,23 +161,36 @@ The summary bar at the top of the results totals these up across every file
 in the batch, so a quick glance tells you whether anything in a large batch
 needs a second look before you import it.
 
-## Hands & Stats
+## Player Overview & Advanced Stats
 
-**Hands** and **Stats** are the same page now, not separate tabs — one
-shared filter bar at the top drives both a compact stats overview and the
-hands table below it at once. See "Layout" further down for the visual
-structure, and "Using it" for exactly what each filter does.
+**Player Overview** and the hands table are the same page (still not
+separate tabs) — one shared filter bar at the top drives both at once. See
+"Layout" further down for the visual structure, and "Using it" for exactly
+what each filter does.
 
-Stats numbers shown: net result, winrate (bb/100), EV winrate, VPIP, PFR,
-RFI%, Limp%, Cold Call%, 3-Bet%, Fold to 3-Bet%, 4-Bet%, Fold to 4-Bet%,
-Squeeze%, Attempt to Steal%, Fold to Steal%, WTSD%, W$SD%, W$WSF%,
-Aggression Factor, Flop/Turn/River Aggression, Flop/Turn/River C-Bet% (plus
-Fold to C-Bet% for each), Flop/Turn/River Check-Raise%, and a
-cumulative-results-over-time chart — always computed over whatever the
-current filters match, not the whole database unconditionally. It works by
-re-running the same stats engine against the raw text of every matching
-hand (not a separate, lighter computation), so it can never silently drift
-from what the hands table itself is showing.
+Player Overview deliberately shows a compact, Dojson-HUD-style summary — 9
+headline numbers (Hands, Winnings, VPIP, Home, Winrate, PFR, WWSF, Expected
+V, 3Bet) plus the cumulative-results-over-time chart — not the full stat
+breakdown. "Home" is whichever stake bucket has the most hands under the
+current filters, not necessarily the currently-selected stakes filter.
+
+**Advanced Stats** has the rest: a grouped HUD table covering every stat
+`stats.js` computes (VPIP, PFR, RFI%, Limp%, Cold Call%, 3-Bet%/Fold to
+3-Bet%, 4-Bet%/Fold to 4-Bet%, Squeeze%, Attempt to Steal%/Fold to Steal%,
+Flop/Turn/River C-Bet% and Fold to C-Bet%, Flop/Turn/River Check-Raise%,
+Aggression Factor, Flop/Turn/River Aggression, WTSD%, W$SD%, W$WSF%), plus
+the hand-by-hand results graph underneath it. Both tabs read from the same
+`aggregateStats()` payload — always computed over whatever the current
+filters match, not the whole database unconditionally, by re-running the
+same stats engine against the raw text of every matching hand (not a
+separate, lighter computation), so neither tab can ever silently drift from
+what the hands table itself is showing.
+
+The grouped sections in Advanced Stats' HUD table (Preflop, Steal, C-Bet,
+Check-Raise, Aggression & Showdown) are this app's own organization, not a
+1:1 clone of Dojson's — Dojson's IP/OOP, BvB, and PROBE/DONK/STAB splits
+need seat-position-relative tracking this app's stats engine doesn't have
+yet (a deliberately deferred "Phase 3").
 
 A few things worth knowing about how these numbers are computed:
 
@@ -342,7 +355,7 @@ other) rather than converting freshly-loaded files.
 
 **Exports whatever the shared filter bar currently matches** — the same
 player, dates, stakes, hand category, and every other filter already
-narrowing the Hands tab and Advanced Graph, not the files currently loaded
+narrowing Player Overview and Advanced Stats, not the files currently loaded
 in the Import tab above it, which is a separate, unrelated set. The count
 shown next to "Export from Database" is exactly `tableState.total`, the
 same number already being tracked for the Hands table's own pagination —
@@ -409,17 +422,17 @@ safeguards, not just a file copy:
 ### Tabs always reflect the current database — a real bug fixed
 
 Reported after importing more hands onto an already-populated database: the
-Import Hands page correctly showed the new count, but the Hands and
-Advanced Graph tabs kept showing the count from before that import. The
+Import Hands page correctly showed the new count, but the Player Overview
+and Advanced Stats tabs kept showing the count from before that import. The
 backend itself was verified correct first (a real incremental-import test,
 adding a second batch onto an already-populated database, confirms every
 downstream query reflects the new total exactly), so the fix is entirely on
 the renderer side, and covers more than the single reported case:
 
-- **Any tab switch to Hands or Advanced Graph now re-fetches fresh data,
-  every time, not just on first load.** Previously, only the very first
-  visit to the Hands tab triggered a data fetch; everything after that
-  relied entirely on specific actions (a filter change, an import)
+- **Any tab switch to Player Overview or Advanced Stats now re-fetches
+  fresh data, every time, not just on first load.** Previously, only the
+  very first visit to the Player Overview tab triggered a data fetch;
+  everything after that relied entirely on specific actions (a filter change, an import)
   correctly triggering a refresh. If any of those ever failed silently,
   the tab would stay stale indefinitely with nothing forcing a reload
   short of restarting the app. Now, simply clicking into either tab is
@@ -516,7 +529,7 @@ and winner data.
 The player dropdown lists every name this app has ever seen sit at a
 table, not just the ones you've specifically imported your own hand
 history for. Select any of them and the whole app — stat cards, the
-Advanced Graph, the hands table, and clicking into an individual hand — all
+Advanced Stats HUD table, the hands table, and clicking into an individual hand — all
 switch to *their* perspective: their net result, their VPIP/PFR, their
 position in each hand, their cards when known.
 
@@ -612,12 +625,12 @@ added in both `test/stats.test.js` and `test/handReplay.test.js`.
 
 The **filters bar sits above the tab navigation itself**, not inside any
 one tab — it's shared page chrome, not scoped to whichever tab happens to
-be active. This matters concretely: switch to **Advanced Graph** and the
-same filters still apply there too, exactly as they do on the **Hands**
-tab, since both read from the same filter state and the same underlying
-query. (**Import Hands** shows the filters bar too, even though it isn't
-functionally relevant there — kept simple rather than conditionally
-hiding it per tab.)
+be active. This matters concretely: switch to **Advanced Stats** and the
+same filters still apply there too, exactly as they do on the **Player
+Overview** tab, since both read from the same filter state and the same
+underlying query. (**Import Hands** shows the filters bar too, even though
+it isn't functionally relevant there — kept simple rather than
+conditionally hiding it per tab.)
 
 **The filters bar and tab navigation align with the content box below
 them**, which took a real fix, not just a glance: `main` (holding the
@@ -636,33 +649,36 @@ window regardless of content width, so it needed an inner wrapper instead
 — the background stays full-width, the buttons inside it align with the
 content.
 
-Three tabs: **Hands** (the default — stat cards on the left, a compact
-cumulative-results chart on the right, and the hands table below both, all
-in one panel), **Advanced Graph** (see below), and **Import Hands** (the
-drag/drop area, Convert & Save, Import to Hand Database).
+Three tabs: **Player Overview** (the default — 9 headline stat cards on the
+left, a compact cumulative-results chart on the right, and the hands table
+below both, all in one panel), **Advanced Stats** (a grouped HUD table of
+every stat `stats.js` computes, plus the fuller hand-by-hand results graph
+underneath it — see below), and **Import Hands** (the drag/drop area,
+Convert & Save, Import to Hand Database).
 
-The first stat card is **Hands** — how many hands match the current
-filters, always. This exists specifically so the rest of the numbers next
-to it (Net Result, Winrate, VPIP, and so on) always have their sample size
-sitting right there, rather than requiring a glance elsewhere to know how
-much data a given percentage is actually based on.
+The first stat card on Player Overview is **Hands** — how many hands match
+the current filters, always. This exists specifically so the rest of the
+numbers next to it (Winnings, VPIP, and so on) always have their sample
+size sitting right there, rather than requiring a glance elsewhere to know
+how much data a given percentage is actually based on.
 
-**The By Position / By Stake breakdowns have been removed entirely**, not
-just fixed. They started as a native `<details>`/`<summary>` accordion,
-then got rebuilt as a plain button + `classList.toggle('hidden')` after
-real bugs were reported (one accordion sometimes opening both, height
+**The By Position / By Stake breakdown *tables* have been removed
+entirely**, not just fixed. They started as a native `<details>`/`<summary>`
+accordion, then got rebuilt as a plain button + `classList.toggle('hidden')`
+after real bugs were reported (one accordion sometimes opening both, height
 becoming unstable after repeated toggling, content occasionally failing to
 render — most likely from how Chromium animates native `<details>`
 transitions interacting with this app's CSS, though that specific
-diagnosis was never fully confirmed). Rather than keep chasing it, the
-breakdowns themselves were dropped: they only made sense as a picture of
-the *whole* database, and this page is now built entirely around showing
-whatever the current filters narrow things down to — a by-position or
-by-stake split of an already-filtered set doesn't carry the same meaning.
-The underlying computation (`stats.byPosition`, `stats.byStake` in
-`src/stats.js`'s `aggregateStats`) is left in place, just no longer
-rendered anywhere — a deliberate, conservative choice so nothing tested or
-potentially useful later gets torn out along with the UI that displayed it.
+diagnosis was never fully confirmed). Rather than keep chasing it, the full
+breakdown tables themselves were dropped: they only made sense as a picture
+of the *whole* database, and this page is now built entirely around
+showing whatever the current filters narrow things down to — a
+by-position or by-stake split of an already-filtered set doesn't carry the
+same meaning. `stats.byPosition` is still computed but not rendered
+anywhere. `stats.byStake` is now used for exactly one derived value —
+Player Overview's "Home" card (whichever stake bucket has the most hands) —
+not as a full breakdown table, so the "not a full picture of an
+already-filtered set" reasoning above still holds for it.
 
 The hands table shows roughly 10 rows at a time (still fetches and holds
 25 by default — this only limits the visible viewport, with the rest
@@ -713,11 +729,15 @@ piece is genuinely less verified than most of this app: there's no real
 Electron runtime available in the sandbox this was built in, so beyond a
 syntax check, the capture-and-resize sequence itself hasn't been run.
 
-### Advanced Graph
+### Advanced Stats
 
-A larger, more detailed version of the same cumulative-results chart shown
-on the Hands tab — same filters applying to it, just given a whole tab's
-worth of space instead of sharing a row with the stat cards.
+The tab's actual content is the grouped HUD table described above (see
+"Player Overview & Advanced Stats"); the rest of this section covers the
+results graph underneath it — a larger, more detailed version of the same
+cumulative-results chart shown on Player Overview, same filters applying to
+it, just given more of the tab's space than the small chart gets (though
+now sharing that space with the HUD table above it, not the whole tab to
+itself).
 
 **The x-axis is hand number, not calendar date.** A separate series
 (`stats.handTimeline` in `src/stats.js`) drives this chart specifically —
@@ -905,7 +925,7 @@ checkbox it used to be.** The old checkbox is gone — replaced because it
 only supported "showdown hands only", with no way to isolate the *other*
 side (hands where cards weren't shown), and because its underlying
 definition needed reconciling with a real discrepancy found while
-building the Advanced Graph (see that section above): this dropdown now
+building the Advanced Stats graph (see that section above): this dropdown now
 uses the exact same `heroCardsShown` signal as the graph's blue/red lines,
 kept deliberately in sync (down to the same redacted-cards guard,
 `hasValidCards`, ported into `src/stats.js` to match `src/handReplay.js`'s
@@ -1195,7 +1215,7 @@ test/handEvaluator.test.js        Hand evaluator tests — run with `npm test`
 test/equity.test.js               Equity engine tests — run with `npm test`
 test/evAnalysis.test.js           EV adjustment tests — run with `npm test`
 test/chartMath.test.js            Chart axis math tests — run with `npm test`
-renderer/index.html, renderer.js, style.css   Main window (Hands, Advanced Graph, Import Hands tabs)
+renderer/index.html, renderer.js, style.css   Main window (Player Overview, Advanced Stats, Import Hands tabs)
 renderer/hand-detail.html, hand-detail.js, hand-detail.css   Per-hand detail sub-window (Formatted / raw / CoinPoker views)
 build/icon.ico, icon.png       App icon (installer + window/taskbar)
 .github/workflows/            GitHub Actions workflow to build the Windows installer

@@ -86,8 +86,8 @@
 
   <nav class="tab-nav">
     <div class="tab-nav-inner">
-      <button class="tab-btn active" data-tab="hands">Hands</button>
-      <button class="tab-btn" data-tab="graph">Advanced Graph</button>
+      <button class="tab-btn active" data-tab="hands">Player Overview</button>
+      <button class="tab-btn" data-tab="graph">Advanced Stats</button>
       <button class="tab-btn" data-tab="import">Import Hands</button>
     </div>
   </nav>
@@ -177,7 +177,7 @@
 
       <section id="statsSection" class="stats-overview">
         <div class="stats-overview-head">
-          <h2>Stats</h2>
+          <h2>Overview</h2>
           <span id="statsHeroLabel" class="stats-hero-label"></span>
         </div>
         <div class="stats-overview-grid">
@@ -244,9 +244,17 @@
     </div>
 
     <div id="tabGraph" class="tab-content">
+      <section id="hudSection" class="hud-section">
+        <div class="section-head">
+          <h2>Stat Breakdown</h2>
+          <span id="hudHeroLabel" class="stats-hero-label"></span>
+        </div>
+        <div id="hudTable" class="hud-table"></div>
+      </section>
+
       <section id="advancedGraphSection" class="advanced-graph-section">
         <div class="section-head">
-          <h2>Advanced Graph</h2>
+          <h2>Results Graph</h2>
           <span id="advancedGraphLabel" class="stats-hero-label"></span>
         </div>
         <div class="graph-legend">
