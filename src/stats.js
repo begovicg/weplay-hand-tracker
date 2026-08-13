@@ -548,7 +548,7 @@ function analyzeHand(block, heroNameOverride) {
   const attemptSteal = rfi && isLatePosition;
 
   return {
-    handId, bb, date: `${y}-${mo}-${d}`, time: `${hh.padStart(2, '0')}:${mm}:${ss}`, maxSeats,
+    handId, bb, stakesLabel: `$${sbStake}/$${bbStake}`, date: `${y}-${mo}-${d}`, time: `${hh.padStart(2, '0')}:${mm}:${ss}`, maxSeats,
     position, isBombPot,
     net: collected - contributed,
     vpip: voluntaryPreflopAction,
@@ -784,11 +784,14 @@ function aggregateStats(allHands) {
     if (h.pfr) byPosition[h.position].pfr++;
   }
 
-  // By stake (big blind size).
+  // By stake (big blind size). stakesLabel is carried along per bucket
+  // (first hand seen at that bb sets it) so callers can show a real label
+  // like "$0.50/$1" instead of just the bare bb number — used for the
+  // Player Overview "Home" stat (whichever stake has the most hands).
   const byStake = {};
   for (const h of allHands) {
     const key = h.bb;
-    byStake[key] = byStake[key] || { hands: 0, net: 0 };
+    byStake[key] = byStake[key] || { hands: 0, net: 0, stakesLabel: h.stakesLabel };
     byStake[key].hands++;
     byStake[key].net += h.net;
   }

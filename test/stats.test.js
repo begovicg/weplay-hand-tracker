@@ -1086,6 +1086,17 @@ test('position labeling: 6-max full table, heads-up, and an unusual size fall ba
   assert.strictEqual(nine[nine.length - 1], 'BTN');
 });
 
+test('analyzeHand carries a stakesLabel, and aggregateStats\' byStake buckets carry it too — needed for the "Home" (most-played stake) stat', () => {
+  const r = analyzeHand(HAND_VPIP_CALL, 'Hero');
+  assert.strictEqual(r.stakesLabel, '$0.25/$0.50');
+
+  const other = analyzeHand(HAND_VPIP_FOLD, 'Hero'); // same $0.25/$0.50 stake
+  const stats = aggregateStats([r, other]);
+  assert.strictEqual(Object.keys(stats.byStake).length, 1, 'both hands are the same bb — one bucket');
+  assert.strictEqual(stats.byStake[r.bb].stakesLabel, '$0.25/$0.50');
+  assert.strictEqual(stats.byStake[r.bb].hands, 2);
+});
+
 test('aggregateStats basic math: net, BB/100, and win-at-showdown check out by hand', () => {
   const hands = [
     { bb: 0.5, net: 5, vpip: true, pfr: true, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, reachedShowdown: true, wonAtShowdown: true, wonWhenSawFlop: true, postflopAggressive: 1, postflopCalls: 0, isBombPot: false, position: 'BTN' },
