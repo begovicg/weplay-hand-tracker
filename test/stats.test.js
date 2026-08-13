@@ -617,6 +617,83 @@ Seat 2: PlayerB folded on the Flop
 Seat 3: PlayerC (small blind) folded before Flop
 Seat 4: Hero (big blind) folded on the Flop`;
 
+// Hero checks the flop, faces a bet, and check-raises it.
+const HAND_CHECK_RAISE_FLOP = `Weplay Hand #910:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:10:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [7c 7d]
+PlayerA: calls $0.25
+Hero: checks
+*** FLOP *** [2c 7h 9s]
+Hero: checks
+PlayerA: bets $1
+Hero: raises $3 to $4
+PlayerA: folds
+Uncalled bet ($3) returned to Hero
+*** SHOW DOWN ***
+Hero collected $3 from pot
+*** SUMMARY ***
+Total pot $3 | Rake $0
+Seat 1: PlayerA (small blind) folded on the Flop
+Seat 2: Hero (big blind) collected ($3)`;
+
+// Same check-then-facing-a-bet shape on the flop, but hero just calls (a
+// check-raise opportunity, declined) — and separately bets the turn as the
+// FIRST action of that street (not preceded by a check), which must not be
+// mistaken for a check-raise opportunity either.
+const HAND_CHECK_CALL_FLOP = `Weplay Hand #911:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:11:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [7c 7d]
+PlayerA: calls $0.25
+Hero: checks
+*** FLOP *** [2c 7h 9s]
+Hero: checks
+PlayerA: bets $1
+Hero: calls $1
+*** TURN *** [2c 7h 9s] [3h]
+Hero: bets $2
+PlayerA: folds
+Uncalled bet ($2) returned to Hero
+*** SHOW DOWN ***
+Hero collected $3 from pot
+*** SUMMARY ***
+Total pot $3 | Rake $0
+Seat 1: PlayerA (small blind) folded on the Turn
+Seat 2: Hero (big blind) collected ($3)`;
+
+// Same shape again, but hero folds instead — the third possible response to
+// a check-raise opportunity.
+const HAND_CHECK_FOLD_FLOP = `Weplay Hand #912:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:12:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: calls $0.25
+Hero: checks
+*** FLOP *** [Ah Kd 9s]
+Hero: checks
+PlayerA: bets $1
+Hero: folds
+Uncalled bet ($1) returned to PlayerA
+*** SHOW DOWN ***
+PlayerA collected $1.75 from pot
+*** SUMMARY ***
+Total pot $1.75 | Rake $0
+Seat 1: PlayerA (small blind) collected ($1.75)
+Seat 2: Hero (big blind) folded on the Flop`;
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 test('checking as BB with no raise is NOT voluntary — VPIP stays false', () => {
@@ -827,6 +904,45 @@ test('aggregateStats: 4-Bet% and Fold to 4-Bet% use the real opportunity counts,
   assert.strictEqual(stats.fourBet, 100, '1 of 1 real opportunity taken');
   assert.strictEqual(stats.foldToFourBetOppCount, 2, 'only the caller and the folder had their OWN 3-bet specifically re-raised');
   assert.strictEqual(stats.foldToFourBet, 50, '1 of 2 real opportunities, not 1 of 4 hands');
+});
+
+test('check-raise: hero checks the flop, faces a bet, and raises it', () => {
+  const r = analyzeHand(HAND_CHECK_RAISE_FLOP, 'Hero');
+  assert.deepStrictEqual(r.checkRaiseByStreet.FLOP, { opp: 1, cr: 1 });
+  assert.deepStrictEqual(r.checkRaiseByStreet.TURN, { opp: 0, cr: 0 });
+});
+
+test('check-raise opportunity declined via call — and a street-leading bet (no prior check) is never mistaken for one', () => {
+  const r = analyzeHand(HAND_CHECK_CALL_FLOP, 'Hero');
+  assert.deepStrictEqual(r.checkRaiseByStreet.FLOP, { opp: 1, cr: 0 });
+  // Hero's turn bet was the FIRST action of the turn (no check preceded
+  // it) — must not register as a check-raise opportunity of any kind.
+  assert.deepStrictEqual(r.checkRaiseByStreet.TURN, { opp: 0, cr: 0 });
+});
+
+test('check-raise opportunity declined via fold', () => {
+  const r = analyzeHand(HAND_CHECK_FOLD_FLOP, 'Hero');
+  assert.deepStrictEqual(r.checkRaiseByStreet.FLOP, { opp: 1, cr: 0 });
+});
+
+test('checking through (both players check, street just ends) creates no check-raise opportunity at all', () => {
+  const r = analyzeHand(HAND_VPIP_CALL, 'Hero');
+  assert.deepStrictEqual(r.checkRaiseByStreet.FLOP, { opp: 0, cr: 0 }, 'hero checked the flop but was never given a second decision on it');
+  assert.deepStrictEqual(r.checkRaiseByStreet.TURN, { opp: 0, cr: 0 });
+  // Hero's river bet was the FIRST action of the river, not a response to
+  // being checked back to after their own check.
+  assert.deepStrictEqual(r.checkRaiseByStreet.RIVER, { opp: 0, cr: 0 });
+});
+
+test('aggregateStats: Check-Raise% per street divides by real opportunities only', () => {
+  const raised = analyzeHand(HAND_CHECK_RAISE_FLOP, 'Hero');
+  const called = analyzeHand(HAND_CHECK_CALL_FLOP, 'Hero');
+  const folded = analyzeHand(HAND_CHECK_FOLD_FLOP, 'Hero');
+  const stats = aggregateStats([raised, called, folded]);
+  assert.strictEqual(stats.flopCheckRaiseOpportunities, 3, 'all three hands gave hero a real check-raise decision point on the flop');
+  assert.strictEqual(stats.flopCheckRaise, (1 / 3) * 100, '1 of 3 opportunities taken');
+  assert.strictEqual(stats.turnCheckRaiseOpportunities, 0, 'no hand ever gave hero a check-raise decision point on the turn');
+  assert.strictEqual(stats.turnCheckRaise, null);
 });
 
 test('aggregateStats: Squeeze% only counts real raise-plus-caller opportunities, not every 3-bet spot', () => {

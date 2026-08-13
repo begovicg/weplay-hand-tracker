@@ -247,6 +247,20 @@ function analyzeHand(block, heroNameOverride) {
     TURN: { agg: 0, calls: 0, folds: 0, checks: 0 },
     RIVER: { agg: 0, calls: 0, folds: 0, checks: 0 },
   };
+  // Check-Raise%: hero checks, a bet comes back to them on the SAME street,
+  // and hero raises it (as opposed to calling or folding to it). Sequence-
+  // aware, unlike streetAgg above — a hero check only creates a real
+  // check-raise opportunity if hero gets to act again on that street, which
+  // can only happen if someone bet in the meantime (otherwise the street
+  // just ends after the checks around). awaitingCheckRaise[street] is set
+  // true on hero's check and consumed (opportunity counted, flag cleared)
+  // on hero's next action on that same street, whatever it is.
+  const checkRaiseByStreet = {
+    FLOP: { opp: 0, cr: 0 },
+    TURN: { opp: 0, cr: 0 },
+    RIVER: { opp: 0, cr: 0 },
+  };
+  const awaitingCheckRaise = { FLOP: false, TURN: false, RIVER: false };
   let preflopRaiseCount = 0;
   // Tracks hero's most recent preflop decision and exactly how many raises
   // they were facing/making at that moment — used after the loop to classify
@@ -310,12 +324,16 @@ function analyzeHand(block, heroNameOverride) {
         if (street === 'PREFLOP' && facedThreeBetAfterOpening) foldedToThreeBet = true;
         if (street === 'PREFLOP' && facedFourBetAfterThreeBetting) foldedToFourBet = true;
         if (streetAgg[street]) streetAgg[street].folds++;
+        if (awaitingCheckRaise[street]) { checkRaiseByStreet[street].opp++; awaitingCheckRaise[street] = false; } // check-folded, not check-raised
       }
       activePlayers.delete(who);
       continue;
     }
     if ((m = RE_CHECK.exec(l))) {
-      if (m[1] === hero && streetAgg[street]) streetAgg[street].checks++;
+      if (m[1] === hero && streetAgg[street]) {
+        streetAgg[street].checks++;
+        awaitingCheckRaise[street] = true;
+      }
       continue;
     }
 
@@ -334,7 +352,11 @@ function analyzeHand(block, heroNameOverride) {
         if (street === 'PREFLOP' && preflopRaiseCount === 2) facedFourBetOpportunity = true;
         contributed += parseFloat(m[2]);
         if (street === 'PREFLOP') { voluntaryPreflopAction = true; heroLastPreflopAction = { type: 'call', level: preflopRaiseCount }; }
-        else { postflopCalls++; if (streetAgg[street]) streetAgg[street].calls++; }
+        else {
+          postflopCalls++;
+          if (streetAgg[street]) streetAgg[street].calls++;
+          if (awaitingCheckRaise[street]) { checkRaiseByStreet[street].opp++; awaitingCheckRaise[street] = false; } // check-called, not check-raised
+        }
         if (street === 'PREFLOP' && facedThreeBetAfterOpening) facedThreeBetAfterOpening = false; // called it, didn't fold
         if (street === 'PREFLOP' && facedFourBetAfterThreeBetting) facedFourBetAfterThreeBetting = false; // called it, didn't fold
       }
@@ -380,6 +402,7 @@ function analyzeHand(block, heroNameOverride) {
         } else {
           postflopAggressive++;
           if (streetAgg[street]) streetAgg[street].agg++;
+          if (awaitingCheckRaise[street]) { checkRaiseByStreet[street].opp++; checkRaiseByStreet[street].cr++; awaitingCheckRaise[street] = false; }
         }
       } else if (street === 'PREFLOP' && heroOpenedPreflop && preflopRaiseCount === 1) {
         // someone re-raised Hero's own open — a genuine 3-bet against Hero
@@ -435,6 +458,7 @@ function analyzeHand(block, heroNameOverride) {
     postflopAggressive,
     postflopCalls,
     streetAgg,
+    checkRaiseByStreet,
   };
 }
 
@@ -568,6 +592,23 @@ function aggregateStats(allHands) {
   const turnAgg = streetAggPct('TURN');
   const riverAgg = streetAggPct('RIVER');
 
+  // Check-Raise%: (times check-raised) / (times check-raised + check-called
+  // + check-folded) — see analyzeHand's checkRaiseByStreet comment for how
+  // "opportunity" is detected (hero checked, then got to act again on the
+  // same street because someone bet in the meantime).
+  function checkRaisePct(streetKey) {
+    let opp = 0, cr = 0;
+    for (const h of allHands) {
+      if (!h.checkRaiseByStreet) continue;
+      opp += h.checkRaiseByStreet[streetKey].opp;
+      cr += h.checkRaiseByStreet[streetKey].cr;
+    }
+    return { pct: opp > 0 ? (cr / opp) * 100 : null, opportunities: opp };
+  }
+  const flopCR = checkRaisePct('FLOP');
+  const turnCR = checkRaisePct('TURN');
+  const riverCR = checkRaisePct('RIVER');
+
   // By position (non-bomb-pot only — position has no meaning without a
   // preflop betting round to act in).
   const byPosition = {};
@@ -687,6 +728,12 @@ function aggregateStats(allHands) {
     turnAggressionOpportunities: turnAgg.opportunities,
     riverAggression: riverAgg.pct,
     riverAggressionOpportunities: riverAgg.opportunities,
+    flopCheckRaise: flopCR.pct,
+    flopCheckRaiseOpportunities: flopCR.opportunities,
+    turnCheckRaise: turnCR.pct,
+    turnCheckRaiseOpportunities: turnCR.opportunities,
+    riverCheckRaise: riverCR.pct,
+    riverCheckRaiseOpportunities: riverCR.opportunities,
     byPosition,
     byStake,
     timeline,
