@@ -175,6 +175,28 @@ function analyzeHand(block, heroNameOverride) {
   let hadThreeBetOpportunityAfterOpening = false; // hero's OWN open specifically got re-raised at some point
   let foldedToThreeBet = false;
   let heroOpenedPreflop = false;
+  // RFI (Raised First In): distinct from PFR, which counts every preflop
+  // raise (opens, isolates, 3-bets, 4-bets+). RFI isolates just "hero was
+  // the first player to voluntarily put money in the pot" — the number that
+  // actually describes an opening range by position. anyVoluntaryPreflopAction
+  // tracks whether ANY player (not just hero) has called or raised yet this
+  // preflop — checked at hero's first preflop decision point only (gated by
+  // heroActedPreflopOnce), since a later decision point always has the flag
+  // already set (either by someone else acting first, or by hero's own
+  // first action), so this naturally never re-fires within one hand.
+  let anyVoluntaryPreflopAction = false;
+  let heroActedPreflopOnce = false;
+  let rfiOpportunity = false; // hero's first preflop decision came with the pot still fully unopened
+  let rfi = false; // ...and hero raised
+  // Cold Call: calling the opening raise with zero money already invested —
+  // excludes blind calls (blind money already "in") and limp-then-call
+  // (limp money already "in"), matching PokerTracker's own stated
+  // definition. contributed === 0 at the moment of the decision captures
+  // exactly this, since posting a blind or limping both add to contributed
+  // before a cold-call decision could ever be reached.
+  let coldCallOpportunity = false;
+  let coldCall = false;
+  let limped = false; // entered the pot via a call while the pot was still unraised (preflopRaiseCount === 0)
   let sawFlop = false;
   let reachedShowdown = false; // genuine multi-way contest, not just the header text
   // Distinct from reachedShowdown: a hand can structurally reach a genuine
@@ -211,6 +233,19 @@ function analyzeHand(block, heroNameOverride) {
   let heroLastPreflopAction = null; // { type: 'fold'|'call'|'raise', level }
   const activePlayers = new Set(seats.map((s) => s.name));
 
+  // Marks hero's first preflop decision point (fold/call/raise, whichever
+  // comes first) and records whether the pot was still completely unopened
+  // at that moment — an RFI opportunity. No-op on every later decision
+  // point in the same hand, since heroActedPreflopOnce is only ever false
+  // once. Called BEFORE anyVoluntaryPreflopAction is updated for hero's own
+  // current action, so hero's own raise doesn't count against itself.
+  function noteHeroFirstPreflopDecision() {
+    if (heroActedPreflopOnce || street !== 'PREFLOP') return false;
+    heroActedPreflopOnce = true;
+    rfiOpportunity = !anyVoluntaryPreflopAction;
+    return rfiOpportunity;
+  }
+
   for (const l of lines) {
     const sm = RE_STREET.exec(l);
     if (sm) {
@@ -234,6 +269,11 @@ function analyzeHand(block, heroNameOverride) {
     if ((m = RE_FOLD.exec(l))) {
       const who = m[1];
       if (who === hero) {
+        noteHeroFirstPreflopDecision();
+        // Cold call opportunity: facing the opening raise with zero money
+        // already invested (see the coldCallOpportunity declaration above
+        // for why contributed === 0 is the right check).
+        if (street === 'PREFLOP' && preflopRaiseCount === 1 && contributed === 0) coldCallOpportunity = true;
         // A 3-bet opportunity is facing exactly one prior raise, regardless
         // of what hero does about it — folding counts the same as calling or
         // re-raising, so this has to be checked on every one of hero's
@@ -255,12 +295,23 @@ function analyzeHand(block, heroNameOverride) {
     if ((m = RE_CALL.exec(l))) {
       const who = m[1];
       if (who === hero) {
-        if (street === 'PREFLOP' && preflopRaiseCount === 1) facedThreeBetOpportunity = true;
+        noteHeroFirstPreflopDecision();
+        if (street === 'PREFLOP' && preflopRaiseCount === 1) {
+          facedThreeBetOpportunity = true;
+          // Cold call: calling the opening raise with zero money already
+          // invested (see coldCallOpportunity's declaration for why).
+          if (contributed === 0) { coldCallOpportunity = true; coldCall = true; }
+        }
+        if (street === 'PREFLOP' && preflopRaiseCount === 0) limped = true;
         contributed += parseFloat(m[2]);
         if (street === 'PREFLOP') { voluntaryPreflopAction = true; heroLastPreflopAction = { type: 'call', level: preflopRaiseCount }; }
         else { postflopCalls++; if (streetAgg[street]) streetAgg[street].calls++; }
         if (street === 'PREFLOP' && facedThreeBetAfterOpening) facedThreeBetAfterOpening = false; // called it, didn't fold
       }
+      // Tracks whether ANY player (not just hero) has voluntarily entered
+      // the pot yet — feeds RFI opportunity detection above, so this has to
+      // fire regardless of who made the call.
+      if (street === 'PREFLOP') anyVoluntaryPreflopAction = true;
       continue;
     }
     if ((m = RE_BET.exec(l))) {
@@ -276,6 +327,10 @@ function analyzeHand(block, heroNameOverride) {
       const who = m[1];
       const amt = parseFloat(m[2]);
       if (who === hero) {
+        // Hero's first preflop decision, and it's a raise into a still-fully-
+        // unopened pot — exactly RFI (as opposed to PFR generally, which
+        // also counts isolates/3-bets/4-bets over an already-opened pot).
+        if (noteHeroFirstPreflopDecision()) rfi = true;
         if (street === 'PREFLOP' && preflopRaiseCount === 1) { facedThreeBetOpportunity = true; madeThreeBet = true; }
         contributed += amt;
         if (street === 'PREFLOP') {
@@ -293,7 +348,7 @@ function analyzeHand(block, heroNameOverride) {
         facedThreeBetAfterOpening = true;
         hadThreeBetOpportunityAfterOpening = true;
       }
-      if (street === 'PREFLOP') preflopRaiseCount++;
+      if (street === 'PREFLOP') { anyVoluntaryPreflopAction = true; preflopRaiseCount++; }
       continue;
     }
     if ((m = RE_UNCALLED.exec(l)) && m[2] === hero) { contributed -= parseFloat(m[1]); continue; }
@@ -314,6 +369,11 @@ function analyzeHand(block, heroNameOverride) {
     net: collected - contributed,
     vpip: voluntaryPreflopAction,
     pfr: preflopRaise,
+    rfiOpportunity,
+    rfi,
+    coldCallOpportunity,
+    coldCall,
+    limped,
     threeBet: madeThreeBet,
     facedThreeBetOpportunity,
     foldedToThreeBet,
@@ -367,6 +427,28 @@ function aggregateStats(allHands) {
 
   const vpipCount = nonBomb.filter((h) => h.vpip).length;
   const pfrCount = nonBomb.filter((h) => h.pfr).length;
+
+  // RFI%: (times raised into a still-unopened pot) / (times hero's first
+  // preflop decision found the pot still unopened). Distinct from PFR,
+  // which also counts isolates/3-bets/4-bets over an already-opened pot —
+  // RFI is specifically an opening-range number.
+  const rfiCount = nonBomb.filter((h) => h.rfi).length;
+  const rfiOppCount = nonBomb.filter((h) => h.rfiOpportunity).length;
+
+  // Cold Call%: (times called the opening raise with zero money already
+  // invested) / (times faced that exact situation). See analyzeHand's
+  // coldCallOpportunity comment — excludes blind calls and limp-then-call,
+  // matching PokerTracker's own stated definition.
+  const coldCallCount = nonBomb.filter((h) => h.coldCall).length;
+  const coldCallOppCount = nonBomb.filter((h) => h.coldCallOpportunity).length;
+
+  // Limp%: entered the pot via a call while it was still unraised. Not an
+  // official top-level PokerTracker stat name, but the same VPIP-via-call
+  // vs. VPIP-via-raise breakdown PT exposes through PFR-vs-VPIP comparisons
+  // — uses the same "hands played" denominator as VPIP/PFR, not an
+  // opportunity count, since every hand is a limp opportunity by definition
+  // (nothing has to be facing hero for hero to be able to limp).
+  const limpCount = nonBomb.filter((h) => h.limped).length;
 
   // 3-Bet%: (times hero re-raised while facing exactly one prior raise) /
   // (times hero faced exactly one prior raise at all, regardless of what
@@ -515,6 +597,11 @@ function aggregateStats(allHands) {
     bb100,
     vpip: pct(vpipCount, nonBomb.length),
     pfr: pct(pfrCount, nonBomb.length),
+    rfi: pct(rfiCount, rfiOppCount),
+    rfiOppCount,
+    coldCall: pct(coldCallCount, coldCallOppCount),
+    coldCallOppCount,
+    limp: pct(limpCount, nonBomb.length),
     threeBet: pct(threeBetCount, threeBetOppCount),
     threeBetOppCount,
     foldToThreeBet: pct(foldToThreeBetCount, foldToThreeBetOppCount),

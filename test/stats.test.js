@@ -402,6 +402,137 @@ Board [2c 7d 9s]
 Seat 1: PlayerA (small blind) folded on the Flop
 Seat 2: Hero (big blind) collected ($1)`;
 
+// Hero's first preflop decision finds the pot completely unopened (blinds
+// only) and hero folds it — an RFI opportunity, declined.
+const HAND_RFI_DECLINED_FOLD = `Weplay Hand #901:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:01:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+Seat 3: PlayerC ($50 in chips)
+Hero: posts small blind $0.25
+PlayerC: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: folds
+Hero: folds
+*** SHOW DOWN ***
+PlayerC collected $0.25 from pot
+*** SUMMARY ***
+Total pot $0.25 | Rake $0
+Seat 1: PlayerA folded before Flop
+Seat 2: Hero (small blind) folded before Flop
+Seat 3: PlayerC (big blind) collected ($0.25)`;
+
+// Two limpers act before hero, so the pot is no longer unopened by the time
+// hero raises — an isolation raise, real PFR, but NOT RFI.
+const HAND_ISO_RAISE_NOT_RFI = `Weplay Hand #902:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:02:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: PlayerC ($50 in chips)
+Seat 3: Hero ($50 in chips)
+PlayerC: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Ad]
+PlayerA: calls $0.50
+PlayerC: calls $0.25
+Hero: raises $2.5 to $3
+PlayerA: folds
+PlayerC: folds
+Uncalled bet ($2.5) returned to Hero
+*** SHOW DOWN ***
+Hero collected $1.5 from pot
+*** SUMMARY ***
+Total pot $1.5 | Rake $0
+Seat 1: PlayerA folded before Flop
+Seat 2: PlayerC (small blind) folded before Flop
+Seat 3: Hero (big blind) collected ($1.5)`;
+
+// Hero faces the opening raise with zero money already in the pot (not in
+// the blinds, hadn't limped) and calls — a genuine cold call.
+const HAND_COLD_CALL = `Weplay Hand #904:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:04:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+Seat 3: PlayerC ($50 in chips)
+Seat 4: PlayerD ($50 in chips)
+PlayerC: posts small blind $0.25
+PlayerD: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kh]
+PlayerA: raises $1.5 to $1.5
+Hero: calls $1.5
+PlayerC: folds
+PlayerD: folds
+*** FLOP *** [2c 7d 9s]
+PlayerA: bets $2
+Hero: folds
+Uncalled bet ($2) returned to PlayerA
+*** SHOW DOWN ***
+PlayerA collected $3.65 from pot
+*** SUMMARY ***
+Total pot $3.65 | Rake $0
+Seat 1: PlayerA collected ($3.65)
+Seat 2: Hero folded on the Flop
+Seat 3: PlayerC (small blind) folded before Flop
+Seat 4: PlayerD (big blind) folded before Flop`;
+
+// Hero (BB) defends by calling the raise — money was already in from the
+// blind post, so this must NOT count as a cold call.
+const HAND_BB_DEFENDS_NOT_COLD_CALL = `Weplay Hand #905:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:05:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: PlayerC ($50 in chips)
+Seat 3: Hero ($50 in chips)
+PlayerC: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: raises $1.5 to $1.5
+PlayerC: folds
+Hero: calls $1
+*** FLOP *** [2c 7d 9s]
+Hero: checks
+PlayerA: bets $1
+Hero: folds
+Uncalled bet ($1) returned to PlayerA
+*** SHOW DOWN ***
+PlayerA collected $3.25 from pot
+*** SUMMARY ***
+Total pot $3.25 | Rake $0
+Seat 1: PlayerA collected ($3.25)
+Seat 2: PlayerC (small blind) folded before Flop
+Seat 3: Hero (big blind) folded on the Flop`;
+
+// Hero limps (first decision, unopened pot, calls instead of raising), then
+// faces a raise and folds — a limp, an RFI opportunity declined via limp,
+// and specifically NOT a cold call on the later fold (money already in from
+// the limp itself).
+const HAND_LIMP_THEN_FACE_RAISE = `Weplay Hand #906:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:06:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: Hero ($50 in chips)
+Seat 2: PlayerB ($50 in chips)
+Seat 3: PlayerC ($50 in chips)
+Seat 4: PlayerD ($50 in chips)
+PlayerC: posts small blind $0.25
+PlayerD: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [7c 7d]
+Hero: calls $0.50
+PlayerB: raises $2 to $2
+PlayerC: folds
+PlayerD: folds
+Hero: folds
+Uncalled bet ($1.5) returned to PlayerB
+*** SHOW DOWN ***
+PlayerB collected $1.25 from pot
+*** SUMMARY ***
+Total pot $1.25 | Rake $0
+Seat 1: Hero folded before Flop
+Seat 2: PlayerB collected ($1.25)
+Seat 3: PlayerC (small blind) folded before Flop
+Seat 4: PlayerD (big blind) folded before Flop`;
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 test('checking as BB with no raise is NOT voluntary — VPIP stays false', () => {
@@ -432,6 +563,8 @@ test('Hero opens, faces a 3-bet, folds to it', () => {
   assert.strictEqual(r.hadThreeBetOpportunityAfterOpening, true);
   assert.strictEqual(r.foldedToThreeBet, true);
   assert.strictEqual(r.threeBet, false, 'hero did not make a 3-bet themselves here');
+  assert.strictEqual(r.rfiOpportunity, true, 'hero\'s first decision found the pot fully unopened (blinds only)');
+  assert.strictEqual(r.rfi, true, 'and hero raised — a genuine RFI, not just PFR');
 });
 
 test('Hero makes a 3-bet of their own (re-raises an existing raise)', () => {
@@ -440,6 +573,49 @@ test('Hero makes a 3-bet of their own (re-raises an existing raise)', () => {
   assert.strictEqual(r.threeBet, true, 'hero re-raised PlayerC\'s open — that is a 3-bet');
   assert.strictEqual(r.vpip, true);
   assert.strictEqual(r.facedThreeBetOpportunity, true, 'facing a single raise and re-raising it is itself an opportunity taken');
+  assert.strictEqual(r.rfiOpportunity, false, 'PlayerC had already raised before hero acted — the pot was not unopened');
+  assert.strictEqual(r.rfi, false, 'a 3-bet is real PFR, but not RFI');
+});
+
+test('RFI opportunity declined by folding — hero was first to act with the pot unopened but folded', () => {
+  const r = analyzeHand(HAND_RFI_DECLINED_FOLD, 'Hero');
+  assert.strictEqual(r.rfiOpportunity, true);
+  assert.strictEqual(r.rfi, false);
+  assert.strictEqual(r.vpip, false);
+  assert.strictEqual(r.coldCallOpportunity, false, 'hero never faced a raise this hand');
+});
+
+test('isolation raise over limpers is real PFR but NOT RFI — the pot was already opened by the time hero acted', () => {
+  const r = analyzeHand(HAND_ISO_RAISE_NOT_RFI, 'Hero');
+  assert.strictEqual(r.pfr, true);
+  assert.strictEqual(r.vpip, true);
+  assert.strictEqual(r.rfiOpportunity, false, 'two players had already limped before hero\'s turn');
+  assert.strictEqual(r.rfi, false);
+});
+
+test('cold call: facing the opening raise with zero money already in the pot', () => {
+  const r = analyzeHand(HAND_COLD_CALL, 'Hero');
+  assert.strictEqual(r.coldCallOpportunity, true);
+  assert.strictEqual(r.coldCall, true);
+  assert.strictEqual(r.vpip, true);
+  assert.strictEqual(r.limped, false, 'hero called a raise, not the unraised big blind');
+  assert.strictEqual(r.rfiOpportunity, false, 'PlayerA had already raised before hero acted');
+});
+
+test('BB defending a raise is NOT a cold call — blind money was already invested', () => {
+  const r = analyzeHand(HAND_BB_DEFENDS_NOT_COLD_CALL, 'Hero');
+  assert.strictEqual(r.coldCallOpportunity, false, 'hero already had the BB posted — not "zero money in" per PokerTracker\'s own definition');
+  assert.strictEqual(r.coldCall, false);
+  assert.strictEqual(r.vpip, true, 'still a real voluntary call, just not a cold one');
+});
+
+test('limping then folding to a raise: a limp and a declined RFI opportunity, but NOT a cold call on the later fold', () => {
+  const r = analyzeHand(HAND_LIMP_THEN_FACE_RAISE, 'Hero');
+  assert.strictEqual(r.limped, true, 'hero called the unraised big blind — a limp');
+  assert.strictEqual(r.rfiOpportunity, true, 'hero\'s first decision found the pot unopened');
+  assert.strictEqual(r.rfi, false, 'hero called instead of raising — declined the RFI, not taken');
+  assert.strictEqual(r.coldCallOpportunity, false, 'hero already had limp money invested by the time the raise came — not a cold call');
+  assert.strictEqual(r.coldCall, false);
 });
 
 test('facing a single raise and just calling is a 3-bet opportunity too (not just when hero raises)', () => {
@@ -504,6 +680,27 @@ test('aggregateStats basic math: net, BB/100, and win-at-showdown check out by h
   assert.strictEqual(stats.wtsd, 50, 'WTSD should divide by hands that saw a flop, not all hands');
   assert.strictEqual(stats.wonAtShowdown, 100);
   assert.strictEqual(stats.aggressionFactor, 1 / 1);
+});
+
+test('aggregateStats: RFI%, Cold Call%, and Limp% use the right denominators', () => {
+  const hands = [
+    // Hero's first decision is an unopened pot and hero raises: RFI opportunity AND RFI.
+    { bb: 0.5, net: 1, vpip: true, pfr: true, rfi: true, rfiOpportunity: true, coldCall: false, coldCallOpportunity: false, limped: false, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: false, reachedShowdown: false, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 0, isBombPot: false, position: 'BTN' },
+    // Hero's first decision is an unopened pot but hero folds: opportunity declined.
+    { bb: 0.5, net: -0.5, vpip: false, pfr: false, rfi: false, rfiOpportunity: true, coldCall: false, coldCallOpportunity: false, limped: false, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: false, reachedShowdown: false, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 0, isBombPot: false, position: 'UTG' },
+    // Hero faces an already-opened pot and cold calls: NOT an RFI opportunity.
+    { bb: 0.5, net: -1.5, vpip: true, pfr: false, rfi: false, rfiOpportunity: false, coldCall: true, coldCallOpportunity: true, limped: false, threeBet: false, facedThreeBetOpportunity: true, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, reachedShowdown: false, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 1, isBombPot: false, position: 'CO' },
+    // Hero limps: a real RFI opportunity, declined via limp rather than a raise.
+    { bb: 0.5, net: -0.5, vpip: true, pfr: false, rfi: false, rfiOpportunity: true, coldCall: false, coldCallOpportunity: false, limped: true, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, reachedShowdown: false, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 0, isBombPot: false, position: 'MP' },
+    // A bomb pot hand with no preflop decision point at all — must not count toward any denominator.
+    { bb: 0.5, net: 0, vpip: false, pfr: false, rfi: false, rfiOpportunity: false, coldCall: false, coldCallOpportunity: false, limped: false, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, reachedShowdown: false, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 0, isBombPot: true, position: null },
+  ];
+  const stats = aggregateStats(hands);
+  assert.strictEqual(stats.rfiOppCount, 3, 'the raise, the fold, and the limp all found a genuinely unopened pot — the cold call did not');
+  assert.ok(Math.abs(stats.rfi - (100 / 3)) < 0.001, '1 RFI out of 3 opportunities');
+  assert.strictEqual(stats.coldCallOppCount, 1);
+  assert.strictEqual(stats.coldCall, 100);
+  assert.strictEqual(stats.limp, 25, '1 limp out of 4 non-bomb hands, same denominator as VPIP/PFR');
 });
 
 test('aggregateStats: 3-Bet% and Fold to 3-Bet% use the real opportunity counts, not total hands played', () => {
