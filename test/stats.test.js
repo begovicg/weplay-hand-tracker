@@ -831,6 +831,115 @@ Seat 2: PlayerB collected ($3.75)
 Seat 3: PlayerC (small blind) folded on the Flop
 Seat 4: Hero (big blind) folded before Flop`;
 
+// Hero is the preflop aggressor and c-bets the flop, then double-barrels
+// the turn too.
+const HAND_CBET_FLOP_MADE = `Weplay Hand #918:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:18:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kh]
+PlayerA: calls $0.25
+Hero: raises $1.5 to $2
+PlayerA: calls $1.5
+*** FLOP *** [2c 7d 9s]
+Hero: bets $2
+PlayerA: calls $2
+*** TURN *** [2c 7d 9s] [3h]
+Hero: bets $4
+PlayerA: folds
+Uncalled bet ($4) returned to Hero
+*** SHOW DOWN ***
+Hero collected $8 from pot
+*** SUMMARY ***
+Total pot $8 | Rake $0
+Seat 1: PlayerA (small blind) folded on the Turn
+Seat 2: Hero (big blind) collected ($8)`;
+
+// Hero is the preflop aggressor but checks the flop back (declining the
+// c-bet). The flop then goes check-check, so nobody is the flop's
+// aggressor — PlayerA's turn bet is NOT a continuation of anyone's prior
+// aggression and must not be mistaken for a c-bet against hero.
+const HAND_CBET_DECLINED = `Weplay Hand #919:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:19:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: calls $0.25
+Hero: raises $1.5 to $2
+PlayerA: calls $1.5
+*** FLOP *** [Ah Kd 9s]
+Hero: checks
+PlayerA: checks
+*** TURN *** [Ah Kd 9s] [3h]
+Hero: checks
+PlayerA: bets $2
+Hero: folds
+Uncalled bet ($2) returned to PlayerA
+*** SHOW DOWN ***
+PlayerA collected $6 from pot
+*** SUMMARY ***
+Total pot $6 | Rake $0
+Seat 1: PlayerA (small blind) collected ($6)
+Seat 2: Hero (big blind) folded on the Turn`;
+
+// Hero is NOT the preflop aggressor; PlayerA (the real aggressor) c-bets
+// the flop, and hero folds to it.
+const HAND_FOLD_TO_CBET_FLOP = `Weplay Hand #920:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:20:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: raises $1.5 to $1.5
+Hero: calls $1
+*** FLOP *** [Ah Kd 9s]
+PlayerA: bets $2
+Hero: folds
+Uncalled bet ($2) returned to PlayerA
+*** SHOW DOWN ***
+PlayerA collected $3 from pot
+*** SUMMARY ***
+Total pot $3 | Rake $0
+Seat 1: PlayerA (small blind) collected ($3)
+Seat 2: Hero (big blind) folded on the Flop`;
+
+// Same c-bet setup, but hero calls it instead of folding.
+const HAND_CALLED_CBET_FLOP = `Weplay Hand #921:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:21:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Jh Jd]
+PlayerA: raises $1.5 to $1.5
+Hero: calls $1
+*** FLOP *** [Ah Kd 9s]
+PlayerA: bets $2
+Hero: calls $2
+*** TURN *** [Ah Kd 9s] [3h]
+PlayerA: checks
+Hero: checks
+*** RIVER *** [Ah Kd 9s 3h] [4h]
+PlayerA: checks
+Hero: checks
+*** SHOW DOWN ***
+PlayerA: shows [Ac Kc] (Two Pair)
+Hero: mucks hand
+PlayerA collected $7 from pot
+*** SUMMARY ***
+Total pot $7 | Rake $0
+Seat 1: PlayerA (small blind) showed [Ac Kc] and won ($7) with Two Pair
+Seat 2: Hero (big blind) mucked`;
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 test('checking as BB with no raise is NOT voluntary — VPIP stays false', () => {
@@ -1103,6 +1212,49 @@ test('a live caller between the raiser and hero disqualifies steal defense', () 
   const r = analyzeHand(HAND_STEAL_DEFENSE_DISQUALIFIED_BY_CALLER, 'Hero');
   assert.strictEqual(r.stealDefenseOpportunity, false, 'PlayerC called the raise before hero acted — no longer a clean heads-up steal-defense spot');
   assert.strictEqual(r.foldedToSteal, false);
+});
+
+test('c-bet made: hero was the preflop aggressor and bets the flop, then double-barrels the turn', () => {
+  const r = analyzeHand(HAND_CBET_FLOP_MADE, 'Hero');
+  assert.deepStrictEqual(r.cbetOpportunity, { FLOP: true, TURN: true, RIVER: false });
+  assert.deepStrictEqual(r.cbetMade, { FLOP: true, TURN: true, RIVER: false });
+});
+
+test('c-bet declined via check, and a non-aggressor\'s later bet is never mistaken for a c-bet', () => {
+  const r = analyzeHand(HAND_CBET_DECLINED, 'Hero');
+  assert.deepStrictEqual(r.cbetOpportunity, { FLOP: true, TURN: false, RIVER: false }, 'hero was the preflop aggressor and had the flop c-bet chance, but not the turn one — nobody bet the flop, so nobody carried aggression into the turn');
+  assert.deepStrictEqual(r.cbetMade, { FLOP: false, TURN: false, RIVER: false });
+  // PlayerA's turn bet, after a checked-through flop, is not a continuation
+  // of anyone's prior aggression — must not register as a c-bet hero faced.
+  assert.deepStrictEqual(r.facedCBetOpportunity, { FLOP: false, TURN: false, RIVER: false });
+  assert.deepStrictEqual(r.foldedToCBet, { FLOP: false, TURN: false, RIVER: false });
+});
+
+test('fold to c-bet: hero was NOT the preflop aggressor, faces a genuine c-bet from the real aggressor, and folds', () => {
+  const r = analyzeHand(HAND_FOLD_TO_CBET_FLOP, 'Hero');
+  assert.deepStrictEqual(r.cbetOpportunity, { FLOP: false, TURN: false, RIVER: false }, 'hero was not the preflop aggressor — never had a c-bet chance themselves');
+  assert.deepStrictEqual(r.facedCBetOpportunity, { FLOP: true, TURN: false, RIVER: false });
+  assert.deepStrictEqual(r.foldedToCBet, { FLOP: true, TURN: false, RIVER: false });
+});
+
+test('facing a c-bet and calling it — the opportunity existed but hero did not fold', () => {
+  const r = analyzeHand(HAND_CALLED_CBET_FLOP, 'Hero');
+  assert.deepStrictEqual(r.facedCBetOpportunity, { FLOP: true, TURN: false, RIVER: false });
+  assert.deepStrictEqual(r.foldedToCBet, { FLOP: false, TURN: false, RIVER: false }, 'hero called, did not fold');
+});
+
+test('aggregateStats: C-Bet% and Fold to C-Bet% per street divide by the real opportunity counts', () => {
+  const made = analyzeHand(HAND_CBET_FLOP_MADE, 'Hero'); // flop+turn cbet opportunity and made
+  const declined = analyzeHand(HAND_CBET_DECLINED, 'Hero'); // flop cbet opportunity, declined; no faced-cbet anywhere
+  const folded = analyzeHand(HAND_FOLD_TO_CBET_FLOP, 'Hero'); // flop faced-cbet opportunity, folded
+  const called = analyzeHand(HAND_CALLED_CBET_FLOP, 'Hero'); // flop faced-cbet opportunity, called
+  const stats = aggregateStats([made, declined, folded, called]);
+  assert.strictEqual(stats.flopCbetOpportunities, 2, 'made + declined both gave hero a real flop c-bet decision');
+  assert.strictEqual(stats.flopCbet, 50, '1 of 2 opportunities taken');
+  assert.strictEqual(stats.turnCbetOpportunities, 1, 'only the double-barrel hand ever carried aggression into the turn');
+  assert.strictEqual(stats.turnCbet, 100);
+  assert.strictEqual(stats.flopFoldToCbetOpportunities, 2, 'folded + called both genuinely faced the real aggressor\'s flop bet');
+  assert.strictEqual(stats.flopFoldToCbet, 50, '1 of 2 opportunities folded');
 });
 
 test('aggregateStats: Attempt to Steal% and Fold to Steal% use the real opportunity counts', () => {

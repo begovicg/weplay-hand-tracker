@@ -287,6 +287,25 @@ function analyzeHand(block, heroNameOverride) {
     RIVER: { opp: 0, cr: 0 },
   };
   const awaitingCheckRaise = { FLOP: false, TURN: false, RIVER: false };
+  // C-Bet%: hero was the PREVIOUS street's last aggressor (the final
+  // preflop raiser, for a flop c-bet; whoever bet/raised the flop, for a
+  // turn c-bet; etc.) and is first to act on the CURRENT street with no bet
+  // in front of them yet. currentStreetAggressor tracks the most recent
+  // bet/raise on whichever street is currently in progress (by ANY player,
+  // not just hero — needed to know who hero is facing, not just whether
+  // hero themselves is aggressive); previousStreetAggressor is a snapshot
+  // of that value taken at each street transition, before it resets to
+  // null for the new street. Fold to C-Bet specifically requires the
+  // bettor hero is FACING to be that same previous-street aggressor — a
+  // bet from some other player (a probe/lead, not a continuation) is a
+  // different question this stat isn't meant to answer.
+  let currentStreetAggressor = null;
+  let previousStreetAggressor = null;
+  let hasBetThisStreet = false;
+  const cbetOpportunity = { FLOP: false, TURN: false, RIVER: false };
+  const cbetMade = { FLOP: false, TURN: false, RIVER: false };
+  const facedCBetOpportunity = { FLOP: false, TURN: false, RIVER: false };
+  const foldedToCBet = { FLOP: false, TURN: false, RIVER: false };
   let preflopRaiseCount = 0;
   // Tracks hero's most recent preflop decision and exactly how many raises
   // they were facing/making at that moment — used after the loop to classify
@@ -312,10 +331,23 @@ function analyzeHand(block, heroNameOverride) {
     const sm = RE_STREET.exec(l);
     if (sm) {
       const name = sm[1];
-      if (name === 'FLOP') { street = 'FLOP'; if (inHandThisFar) sawFlop = true; }
-      else if (name === 'TURN') street = 'TURN';
-      else if (name === 'RIVER') street = 'RIVER';
-      else if (name === 'SHOW DOWN') {
+      if (name === 'FLOP') {
+        street = 'FLOP';
+        if (inHandThisFar) sawFlop = true;
+        previousStreetAggressor = currentStreetAggressor; // the final preflop raiser, if any
+        currentStreetAggressor = null;
+        hasBetThisStreet = false;
+      } else if (name === 'TURN') {
+        street = 'TURN';
+        previousStreetAggressor = currentStreetAggressor; // whoever bet/raised the flop, if anyone
+        currentStreetAggressor = null;
+        hasBetThisStreet = false;
+      } else if (name === 'RIVER') {
+        street = 'RIVER';
+        previousStreetAggressor = currentStreetAggressor; // whoever bet/raised the turn, if anyone
+        currentStreetAggressor = null;
+        hasBetThisStreet = false;
+      } else if (name === 'SHOW DOWN') {
         street = 'SHOWDOWN';
         if (inHandThisFar && activePlayers.has(hero) && activePlayers.size >= 2) reachedShowdown = true;
       }
@@ -358,6 +390,13 @@ function analyzeHand(block, heroNameOverride) {
         if (street === 'PREFLOP' && stealDefenseOpportunity && preflopRaiseCount === 1) foldedToSteal = true;
         if (streetAgg[street]) streetAgg[street].folds++;
         if (awaitingCheckRaise[street]) { checkRaiseByStreet[street].opp++; awaitingCheckRaise[street] = false; } // check-folded, not check-raised
+        // Fold to C-Bet: the bet hero just folded to came specifically from
+        // the previous street's aggressor (a genuine continuation bet), not
+        // just any bettor.
+        if (hasBetThisStreet && previousStreetAggressor != null && currentStreetAggressor === previousStreetAggressor) {
+          facedCBetOpportunity[street] = true;
+          foldedToCBet[street] = true;
+        }
       }
       activePlayers.delete(who);
       continue;
@@ -366,6 +405,9 @@ function analyzeHand(block, heroNameOverride) {
       if (m[1] === hero && streetAgg[street]) {
         streetAgg[street].checks++;
         awaitingCheckRaise[street] = true;
+        // Hero had the c-bet chance (was the previous street's aggressor,
+        // no bet in front of them yet) and declined it by checking.
+        if (previousStreetAggressor === hero && !hasBetThisStreet) cbetOpportunity[street] = true;
       }
       continue;
     }
@@ -392,6 +434,11 @@ function analyzeHand(block, heroNameOverride) {
           postflopCalls++;
           if (streetAgg[street]) streetAgg[street].calls++;
           if (awaitingCheckRaise[street]) { checkRaiseByStreet[street].opp++; awaitingCheckRaise[street] = false; } // check-called, not check-raised
+          // Called a c-bet: the bet hero is facing came specifically from
+          // the previous street's aggressor.
+          if (hasBetThisStreet && previousStreetAggressor != null && currentStreetAggressor === previousStreetAggressor) {
+            facedCBetOpportunity[street] = true;
+          }
         }
         if (street === 'PREFLOP' && facedThreeBetAfterOpening) facedThreeBetAfterOpening = false; // called it, didn't fold
         if (street === 'PREFLOP' && facedFourBetAfterThreeBetting) facedFourBetAfterThreeBetting = false; // called it, didn't fold
@@ -409,8 +456,18 @@ function analyzeHand(block, heroNameOverride) {
       if (who === hero) {
         contributed += parseFloat(m[2]);
         if (street === 'PREFLOP') { voluntaryPreflopAction = true; preflopRaise = true; }
-        else { postflopAggressive++; if (streetAgg[street]) streetAgg[street].agg++; }
+        else {
+          postflopAggressive++;
+          if (streetAgg[street]) streetAgg[street].agg++;
+          // A bet only ever happens as the FIRST aggressive action of a
+          // street (a second one would be logged as "raises"), so this is
+          // exactly hero's cbet-or-not decision point.
+          if (previousStreetAggressor === hero) { cbetOpportunity[street] = true; cbetMade[street] = true; }
+        }
       }
+      // Tracks who's aggressive on the CURRENT street, regardless of who —
+      // feeds the c-bet/fold-to-c-bet detection above for every street.
+      if (street !== 'PREFLOP') { hasBetThisStreet = true; currentStreetAggressor = who; }
       continue;
     }
     if ((m = RE_RAISE.exec(l))) {
@@ -451,6 +508,11 @@ function analyzeHand(block, heroNameOverride) {
           postflopAggressive++;
           if (streetAgg[street]) streetAgg[street].agg++;
           if (awaitingCheckRaise[street]) { checkRaiseByStreet[street].opp++; checkRaiseByStreet[street].cr++; awaitingCheckRaise[street] = false; }
+          // Raised a c-bet: the bet hero is facing (and re-raising) came
+          // specifically from the previous street's aggressor.
+          if (hasBetThisStreet && previousStreetAggressor != null && currentStreetAggressor === previousStreetAggressor) {
+            facedCBetOpportunity[street] = true;
+          }
         }
       } else if (street === 'PREFLOP' && heroOpenedPreflop && preflopRaiseCount === 1) {
         // someone re-raised Hero's own open — a genuine 3-bet against Hero
@@ -462,6 +524,8 @@ function analyzeHand(block, heroNameOverride) {
         hadFourBetOpportunityAfterThreeBetting = true;
       }
       if (street === 'PREFLOP') { anyVoluntaryPreflopAction = true; preflopRaiseCount++; callersSinceLastRaise = 0; }
+      else hasBetThisStreet = true;
+      currentStreetAggressor = who; // this raise is now the (possibly new) aggressor of the current street
       continue;
     }
     if ((m = RE_UNCALLED.exec(l)) && m[2] === hero) { contributed -= parseFloat(m[1]); continue; }
@@ -508,6 +572,10 @@ function analyzeHand(block, heroNameOverride) {
     hadFourBetOpportunityAfterThreeBetting,
     squeeze,
     squeezeOpportunity,
+    cbetOpportunity,
+    cbetMade,
+    facedCBetOpportunity,
+    foldedToCBet,
     handCategory: handCategoryFor(preflopRaiseCount, heroLastPreflopAction),
     sawFlop,
     reachedShowdown,
@@ -678,6 +746,32 @@ function aggregateStats(allHands) {
   const turnCR = checkRaisePct('TURN');
   const riverCR = checkRaisePct('RIVER');
 
+  // C-Bet%: (times continuation-bet) / (times hero was the previous
+  // street's aggressor with no bet yet in front of them) — see
+  // analyzeHand's cbetOpportunity comment. Uses allHands, not nonBomb, the
+  // same as the AFq stats above — a bomb pot has no preflop round so never
+  // creates a flop c-bet opportunity, but flop/turn aggression carrying
+  // into a turn/river c-bet is a real, well-defined question regardless.
+  function cbetPct(streetKey) {
+    const madeCount = allHands.filter((h) => h.cbetMade && h.cbetMade[streetKey]).length;
+    const oppCount = allHands.filter((h) => h.cbetOpportunity && h.cbetOpportunity[streetKey]).length;
+    return { pct: pct(madeCount, oppCount), opportunities: oppCount };
+  }
+  const flopCbet = cbetPct('FLOP');
+  const turnCbet = cbetPct('TURN');
+  const riverCbet = cbetPct('RIVER');
+
+  // Fold to C-Bet%: (times folded to a bet from the previous street's
+  // aggressor) / (times faced that exact situation).
+  function foldToCbetPct(streetKey) {
+    const foldCount = allHands.filter((h) => h.foldedToCBet && h.foldedToCBet[streetKey]).length;
+    const oppCount = allHands.filter((h) => h.facedCBetOpportunity && h.facedCBetOpportunity[streetKey]).length;
+    return { pct: pct(foldCount, oppCount), opportunities: oppCount };
+  }
+  const flopFoldToCbet = foldToCbetPct('FLOP');
+  const turnFoldToCbet = foldToCbetPct('TURN');
+  const riverFoldToCbet = foldToCbetPct('RIVER');
+
   // By position (non-bomb-pot only — position has no meaning without a
   // preflop betting round to act in).
   const byPosition = {};
@@ -807,6 +901,18 @@ function aggregateStats(allHands) {
     turnCheckRaiseOpportunities: turnCR.opportunities,
     riverCheckRaise: riverCR.pct,
     riverCheckRaiseOpportunities: riverCR.opportunities,
+    flopCbet: flopCbet.pct,
+    flopCbetOpportunities: flopCbet.opportunities,
+    turnCbet: turnCbet.pct,
+    turnCbetOpportunities: turnCbet.opportunities,
+    riverCbet: riverCbet.pct,
+    riverCbetOpportunities: riverCbet.opportunities,
+    flopFoldToCbet: flopFoldToCbet.pct,
+    flopFoldToCbetOpportunities: flopFoldToCbet.opportunities,
+    turnFoldToCbet: turnFoldToCbet.pct,
+    turnFoldToCbetOpportunities: turnFoldToCbet.opportunities,
+    riverFoldToCbet: riverFoldToCbet.pct,
+    riverFoldToCbetOpportunities: riverFoldToCbet.opportunities,
     byPosition,
     byStake,
     timeline,
