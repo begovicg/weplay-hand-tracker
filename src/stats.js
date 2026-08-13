@@ -187,23 +187,17 @@ function analyzeHand(block, heroNameOverride) {
   let inHandThisFar = true;
   let postflopAggressive = 0; // hero's bets + raises, flop/turn/river
   let postflopCalls = 0;
-  // Per-street aggression — switched from Aggression Frequency (AFq, checks
-  // excluded from the denominator) to the "Agg%" definition instead
-  // (DriveHUD's convention: bets+raises over bets+raises+calls+folds+
-  // checks, checks INCLUDED). This was a real, deliberate choice, not the
-  // industry-standard default: AFq is what PokerTracker documents and
-  // what this app originally used, but a real investigation (comparing
-  // this project's own real data both ways: 40.5% AFq vs 25.9% Agg% on
-  // the same flops) confirmed the two definitions produce meaningfully
-  // different numbers — checks are the single most common postflop
-  // action, so excluding them from the denominator concentrates the
-  // remaining "real decisions" pool toward more aggressive-looking
-  // ratios, even when nothing is being computed incorrectly. Agg%,
-  // counting every flop/turn/river decision including checks, was judged
-  // more intuitive and closer to "how often am I actually the aggressor
-  // when I see this street" — a legitimate, equally real convention (see
-  // the README for the full citation), just a different question than AFq
-  // asks.
+  // Per-street aggression uses Aggression Frequency (AFq): (bets+raises) /
+  // (bets+raises+calls+folds), checks excluded from the denominator. This
+  // app briefly switched to DriveHUD's "Agg%" (checks included) after an
+  // investigation into why numbers looked high, but AFq is what
+  // PokerTracker itself documents and is the dominant, most consistently
+  // documented convention across independent sources (PokerTracker's own
+  // forum, Upswing Poker, poker terminology glossaries, community
+  // discussion) — reverted back to it per explicit instruction. Checks are
+  // still tracked below (streetAgg[street].checks) since other call sites
+  // may want the raw count, but they no longer count toward the
+  // opportunities denominator — see streetAggPct() in aggregateStats.
   const streetAgg = {
     FLOP: { agg: 0, calls: 0, folds: 0, checks: 0 },
     TURN: { agg: 0, calls: 0, folds: 0, checks: 0 },
@@ -404,24 +398,24 @@ function aggregateStats(allHands) {
   const totalAggressive = sum(allHands, (h) => h.postflopAggressive);
   const totalPostflopCalls = sum(allHands, (h) => h.postflopCalls);
 
-  // Per-street Agg% (DriveHUD's convention — bets+raises over every
-  // decision on that street, checks included) — see analyzeHand's
-  // streetAgg comment for why this replaced AFq (checks excluded), and how
-  // it's a different question from the aggregate Aggression Factor above.
-  // Summed the same way everything else here is: across every hand, not
-  // just hands that reached that street (a hand that folded preflop
-  // contributes zero to every street's numbers, exactly as it should — it
-  // never had a flop decision to be aggressive or passive about).
+  // Per-street Aggression Frequency (AFq, PokerTracker's convention) —
+  // bets+raises over bets+raises+calls+folds, checks excluded from the
+  // denominator. See analyzeHand's streetAgg comment for why this is the
+  // formula in use, and how it's a different question from the aggregate
+  // Aggression Factor above (a ratio, not a frequency). Summed the same
+  // way everything else here is: across every hand, not just hands that
+  // reached that street (a hand that folded preflop contributes zero to
+  // every street's numbers, exactly as it should — it never had a flop
+  // decision to be aggressive or passive about).
   function streetAggPct(streetKey) {
-    let agg = 0, calls = 0, folds = 0, checks = 0;
+    let agg = 0, calls = 0, folds = 0;
     for (const h of allHands) {
       if (!h.streetAgg) continue;
       agg += h.streetAgg[streetKey].agg;
       calls += h.streetAgg[streetKey].calls;
       folds += h.streetAgg[streetKey].folds;
-      checks += h.streetAgg[streetKey].checks;
     }
-    const opportunities = agg + calls + folds + checks;
+    const opportunities = agg + calls + folds;
     return { pct: opportunities > 0 ? (agg / opportunities) * 100 : null, opportunities };
   }
   const flopAgg = streetAggPct('FLOP');

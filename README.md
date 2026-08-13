@@ -178,29 +178,30 @@ it can never silently drift from what the hands table itself is showing.
 
 A few things worth knowing about how these numbers are computed:
 
-- **Flop/Turn/River Aggression uses Agg%, DriveHUD's documented
-  definition** — `(bets + raises) / (bets + raises + calls + folds +
-  checks) × 100`, per street, with checks INCLUDED in the denominator.
-  Worth being explicit about, since "aggression" isn't one standard
-  number across poker software. This app actually shipped with the other
-  common definition first — PokerTracker's Aggression Frequency (AFq),
-  checks excluded — and switched after a real investigation, not a
-  hunch: reported numbers looked "flatteringly high," so before assuming
-  anything the actual raw counts got pulled and two real hands were
-  traced by hand against the raw text (both matched exactly — no bug),
-  which pointed at the real cause: AFq's excluded-checks denominator was
-  substantially narrower than the numbers a player naturally expects,
-  since checking is the single most common postflop action (on this
-  project's own real data: 40.5% AFq vs. roughly 26% if measured against
-  every flop seen instead — a genuine, large, structural gap purely from
-  the definition, confirmed with the same investigation on both hero and
-  a real opponent). Agg%, counting every decision including checks, was
-  judged the more intuitive number and is what's shown now. This app's
-  existing Aggression Factor (a ratio, bets+raises over calls, folds and
-  checks both excluded) is a genuinely different question — how
-  aggressive vs. passive a player's postflop volume is — not a
-  per-street breakdown of it, and the two aren't meant to be directly
-  compared.
+- **Flop/Turn/River Aggression uses Aggression Frequency (AFq),
+  PokerTracker's documented definition** — `(bets + raises) / (bets +
+  raises + calls + folds) × 100`, per street, with checks EXCLUDED from
+  the denominator. Worth being explicit about, since "aggression" isn't
+  one standard number across poker software. This app briefly switched
+  to DriveHUD's "Agg%" (checks included) after an investigation into why
+  reported numbers looked flatteringly high — the actual raw counts were
+  pulled and two real hands were traced by hand against the raw text
+  (both matched exactly — no bug), which pointed at the real cause:
+  AFq's excluded-checks denominator is substantially narrower than the
+  numbers a player naturally expects, since checking is the single most
+  common postflop action (on this project's own real data: 40.5% AFq
+  vs. roughly 26% if measured against every flop seen instead — a
+  genuine, large, structural gap purely from the definition). That
+  investigation was real, but AFq is what's shown now — reverted back
+  per explicit instruction, since it's the most consistently,
+  repeatedly documented formula across independent sources
+  (PokerTracker's own forum, Upswing Poker, poker terminology
+  glossaries, community discussion): the dominant industry convention,
+  not a fringe one. This app's existing Aggression Factor (a ratio,
+  bets+raises over calls, folds and checks all excluded) is a genuinely
+  different question — how aggressive vs. passive a player's postflop
+  volume is — not a per-street breakdown of it, and the two aren't
+  meant to be directly compared.
 - **The "opportunities" count can exceed the number of times a street was
   seen** — this looks like it should be a bug at first glance (this
   project's own flop opportunities came out higher than hands that saw a
