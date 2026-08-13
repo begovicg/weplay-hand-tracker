@@ -621,8 +621,16 @@ function renderStats(payload) {
   statsCards.appendChild(statCard('EV Winrate', evBb100 != null ? `${evBb100.toFixed(1)} bb/100` : '—', moneyClass(evBb100), evAdjustedHandCount ? `${evAdjustedHandCount} all-in adj.` : 'no all-ins yet'));
   statsCards.appendChild(statCard('VPIP', fmtPct(stats.vpip), '', `${stats.nonBombPotHands} hands`));
   statsCards.appendChild(statCard('PFR', fmtPct(stats.pfr), ''));
+  statsCards.appendChild(statCard('RFI', fmtPct(stats.rfi), '', `${stats.rfiOppCount} opps`));
+  statsCards.appendChild(statCard('Limp', fmtPct(stats.limp), ''));
+  statsCards.appendChild(statCard('Cold Call', fmtPct(stats.coldCall), '', `${stats.coldCallOppCount} opps`));
   statsCards.appendChild(statCard('3-Bet', fmtPct(stats.threeBet), '', `${stats.threeBetOppCount} opps`));
   statsCards.appendChild(statCard('Fold to 3-Bet', fmtPct(stats.foldToThreeBet), ''));
+  statsCards.appendChild(statCard('4-Bet', fmtPct(stats.fourBet), '', `${stats.fourBetOppCount} opps`));
+  statsCards.appendChild(statCard('Fold to 4-Bet', fmtPct(stats.foldToFourBet), '', `${stats.foldToFourBetOppCount} opps`));
+  statsCards.appendChild(statCard('Squeeze', fmtPct(stats.squeeze), '', `${stats.squeezeOppCount} opps`));
+  statsCards.appendChild(statCard('Attempt to Steal', fmtPct(stats.attemptSteal), '', `${stats.stealOppCount} opps`));
+  statsCards.appendChild(statCard('Fold to Steal', fmtPct(stats.foldToSteal), '', `${stats.foldToStealOppCount} opps`));
   statsCards.appendChild(statCard('WTSD', fmtPct(stats.wtsd), ''));
   statsCards.appendChild(statCard('W$SD', fmtPct(stats.wonAtShowdown), '', 'at showdown'));
   statsCards.appendChild(statCard('W$WSF', fmtPct(stats.wonWhenSawFlop), '', 'saw flop'));
@@ -630,6 +638,15 @@ function renderStats(payload) {
   statsCards.appendChild(statCard('Flop Aggression', fmtPct(stats.flopAggression), '', `${stats.flopAggressionOpportunities} opps`));
   statsCards.appendChild(statCard('Turn Aggression', fmtPct(stats.turnAggression), '', `${stats.turnAggressionOpportunities} opps`));
   statsCards.appendChild(statCard('River Aggression', fmtPct(stats.riverAggression), '', `${stats.riverAggressionOpportunities} opps`));
+  statsCards.appendChild(statCard('Flop C-Bet', fmtPct(stats.flopCbet), '', `${stats.flopCbetOpportunities} opps`));
+  statsCards.appendChild(statCard('Turn C-Bet', fmtPct(stats.turnCbet), '', `${stats.turnCbetOpportunities} opps`));
+  statsCards.appendChild(statCard('River C-Bet', fmtPct(stats.riverCbet), '', `${stats.riverCbetOpportunities} opps`));
+  statsCards.appendChild(statCard('Fold to Flop C-Bet', fmtPct(stats.flopFoldToCbet), '', `${stats.flopFoldToCbetOpportunities} opps`));
+  statsCards.appendChild(statCard('Fold to Turn C-Bet', fmtPct(stats.turnFoldToCbet), '', `${stats.turnFoldToCbetOpportunities} opps`));
+  statsCards.appendChild(statCard('Fold to River C-Bet', fmtPct(stats.riverFoldToCbet), '', `${stats.riverFoldToCbetOpportunities} opps`));
+  statsCards.appendChild(statCard('Flop Check-Raise', fmtPct(stats.flopCheckRaise), '', `${stats.flopCheckRaiseOpportunities} opps`));
+  statsCards.appendChild(statCard('Turn Check-Raise', fmtPct(stats.turnCheckRaise), '', `${stats.turnCheckRaiseOpportunities} opps`));
+  statsCards.appendChild(statCard('River Check-Raise', fmtPct(stats.riverCheckRaise), '', `${stats.riverCheckRaiseOpportunities} opps`));
   if (stats.bombPotHands > 0) {
     statsCards.appendChild(statCard('Bomb Pot Hands', String(stats.bombPotHands), '', 'excluded above'));
   }

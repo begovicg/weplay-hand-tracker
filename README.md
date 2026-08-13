@@ -169,12 +169,15 @@ hands table below it at once. See "Layout" further down for the visual
 structure, and "Using it" for exactly what each filter does.
 
 Stats numbers shown: net result, winrate (bb/100), EV winrate, VPIP, PFR,
-3-Bet%, Fold to 3-Bet%, WTSD%, W$SD%, W$WSF%, Aggression Factor, Flop/Turn/
-River Aggression, and a cumulative-results-over-time chart — always
-computed over whatever the current filters match, not the whole database
-unconditionally. It works by re-running the same stats engine against the
-raw text of every matching hand (not a separate, lighter computation), so
-it can never silently drift from what the hands table itself is showing.
+RFI%, Limp%, Cold Call%, 3-Bet%, Fold to 3-Bet%, 4-Bet%, Fold to 4-Bet%,
+Squeeze%, Attempt to Steal%, Fold to Steal%, WTSD%, W$SD%, W$WSF%,
+Aggression Factor, Flop/Turn/River Aggression, Flop/Turn/River C-Bet% (plus
+Fold to C-Bet% for each), Flop/Turn/River Check-Raise%, and a
+cumulative-results-over-time chart — always computed over whatever the
+current filters match, not the whole database unconditionally. It works by
+re-running the same stats engine against the raw text of every matching
+hand (not a separate, lighter computation), so it can never silently drift
+from what the hands table itself is showing.
 
 A few things worth knowing about how these numbers are computed:
 
