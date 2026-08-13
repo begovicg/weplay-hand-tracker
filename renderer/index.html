@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Weplay Hand Tracker</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="logo">
+      <span class="logo-mark">W</span>
+      <div>
+        <h1>Weplay Hand Tracker <span id="appVersion" class="app-version"></span></h1>
+        <p class="subtitle">Import, browse, filter, and review your Weplay hands — plus convert to CoinPoker format for Hand2Note / PokerTracker</p>
+      </div>
+    </div>
+  </header>
+
+  <section class="filters-bar">
+    <div class="filter-field">
+      <label for="filterPlayer">Player</label>
+      <select id="filterPlayer"></select>
+    </div>
+    <div class="filter-field">
+      <label for="filterDateFrom">From</label>
+      <input type="date" id="filterDateFrom" />
+    </div>
+    <div class="filter-field">
+      <label for="filterDateTo">To</label>
+      <input type="date" id="filterDateTo" />
+    </div>
+    <div class="filter-field">
+      <label for="filterTableCategory">Table</label>
+      <select id="filterTableCategory"><option value="">All</option></select>
+    </div>
+    <div class="filter-field">
+      <label for="filterStakes">Stakes</label>
+      <select id="filterStakes"><option value="">All</option></select>
+    </div>
+    <div class="filter-field">
+      <label for="filterPosition">Position</label>
+      <select id="filterPosition"><option value="">All</option></select>
+    </div>
+    <div class="filter-field">
+      <label for="filterHandCategory">Hand Category</label>
+      <select id="filterHandCategory">
+        <option value="">All</option>
+        <option value="srp-raiser">SRP (as raiser)</option>
+        <option value="srp-caller">SRP (as caller)</option>
+        <option value="3bet-raiser">3-Bet Pot (as raiser)</option>
+        <option value="3bet-caller">3-Bet Pot (as caller)</option>
+        <option value="4bet-raiser">4-Bet Pot (as raiser)</option>
+        <option value="4bet-caller">4-Bet Pot (as caller)</option>
+      </select>
+    </div>
+    <div class="filter-field">
+      <label for="filterWtsd">Went to Showdown</label>
+      <select id="filterWtsd">
+        <option value="">Both</option>
+        <option value="shown">Yes</option>
+        <option value="not-shown">No</option>
+      </select>
+    </div>
+    <div class="filter-field">
+      <label for="filterSawFlop">Saw Flop</label>
+      <select id="filterSawFlop">
+        <option value="">Both</option>
+        <option value="yes">Yes</option>
+        <option value="no">No</option>
+      </select>
+    </div>
+    <div class="filter-field">
+      <label for="filterPotBbMin">Pot (BB) min</label>
+      <input type="number" id="filterPotBbMin" placeholder="e.g. 10" min="0" step="0.5" class="filter-pot-input" />
+    </div>
+    <div class="filter-field">
+      <label for="filterPotBbMax">Pot (BB) max</label>
+      <input type="number" id="filterPotBbMax" placeholder="e.g. 25" min="0" step="0.5" class="filter-pot-input" />
+    </div>
+    <div class="filter-field filter-search">
+      <label for="filterSearch">Search</label>
+      <input type="text" id="filterSearch" placeholder="Hand ID, file, cards…" />
+    </div>
+    <button id="filterResetBtn" class="btn btn-ghost btn-tiny">Reset filters</button>
+  </section>
+
+  <nav class="tab-nav">
+    <div class="tab-nav-inner">
+      <button class="tab-btn active" data-tab="hands">Hands</button>
+      <button class="tab-btn" data-tab="graph">Advanced Graph</button>
+      <button class="tab-btn" data-tab="import">Import Hands</button>
+    </div>
+  </nav>
+
+  <main>
+    <div id="tabImport" class="tab-content">
+    <section id="dropzone" class="dropzone">
+      <div class="dropzone-inner">
+        <p class="dropzone-title">Drag &amp; drop Weplay hand history .txt files (or a .zip of them) here</p>
+        <p class="dropzone-or">or</p>
+        <button id="browseBtn" class="btn btn-primary">Browse files…</button>
+      </div>
+    </section>
+
+    <section id="fileListSection" class="hidden">
+      <div class="section-head">
+        <h2>Files</h2>
+        <button id="clearBtn" class="btn btn-ghost">Clear all</button>
+      </div>
+      <div id="fileSummary" class="file-summary">
+        <span id="fileSummaryText"></span>
+        <button id="fileSummaryToggle" class="btn btn-ghost btn-tiny">Show files</button>
+      </div>
+      <ul id="fileList" class="file-list hidden"></ul>
+    </section>
+
+    <section class="options">
+      <label class="checkbox-row">
+        <input type="checkbox" id="replaceHeroToggle" checked />
+        <span>Replace my username with <code>Hero</code> in the output (matches CoinPoker's own export convention)</span>
+      </label>
+    </section>
+
+    <section class="actions">
+      <button id="convertBtn" class="btn btn-primary btn-large" disabled>Convert &amp; Save</button>
+      <button id="importDbBtn" class="btn btn-secondary btn-large" disabled>Import to Hand Database</button>
+    </section>
+
+      <section id="resultsSection" class="hidden">
+        <h2>Results</h2>
+        <div id="resultsSummary" class="results-summary"></div>
+        <div id="resultsList" class="results-list"></div>
+      </section>
+
+      <section id="exportSection" class="export-section">
+        <div class="section-head">
+          <h2>Export from Database</h2>
+          <span id="exportCountLabel" class="stats-hero-label"></span>
+        </div>
+        <p class="hero-note">Exports whatever the filters bar above currently
+          matches — the same player, dates, stakes, and every other filter
+          already narrowing the Hands tab, not the files loaded above.
+          Change any of those to change what gets exported.</p>
+        <div class="options">
+          <div class="filter-field export-format-field">
+            <label for="exportFormat">Format</label>
+            <select id="exportFormat">
+              <option value="raw">Weplay original</option>
+              <option value="converted">CoinPoker format</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="exportBtn" class="btn btn-secondary btn-large">Export Filtered Hands</button>
+        </div>
+      </section>
+
+      <section id="backupSection" class="export-section">
+        <div class="section-head">
+          <h2>Backup &amp; Restore</h2>
+        </div>
+        <p class="hero-note">Backup saves the <em>entire</em> database — every
+          hand, not just what the filters currently match — as one file you
+          can keep somewhere safe or move to another machine. Restore
+          replaces the current database with a chosen backup; whatever is
+          currently in the database gets preserved first regardless, so a
+          mistaken restore is never a one-way door.</p>
+        <div class="actions">
+          <button id="backupBtn" class="btn btn-secondary btn-large">Backup Database</button>
+          <button id="restoreBtn" class="btn btn-ghost btn-large">Restore from Backup…</button>
+        </div>
+      </section>
+    </div>
+
+    <div id="tabHands" class="tab-content active">
+
+
+      <section id="statsSection" class="stats-overview">
+        <div class="stats-overview-head">
+          <h2>Stats</h2>
+          <span id="statsHeroLabel" class="stats-hero-label"></span>
+        </div>
+        <div class="stats-overview-grid">
+          <div id="statsCards" class="stats-cards"></div>
+          <div id="statsChartWrap" class="stats-chart-wrap hidden">
+            <h3 class="stats-subhead">Cumulative results over time</h3>
+            <div id="statsChart"></div>
+          </div>
+        </div>
+
+        <div id="handsSection">
+          <div class="section-head">
+            <h2>Hands</h2>
+            <span id="handsDbLabel" class="stats-hero-label"></span>
+          </div>
+          <div class="hands-sort-bar">
+            <label for="handsSortField">Sort by</label>
+            <select id="handsSortField">
+              <option value="date">Date</option>
+              <option value="stakes">Stakes</option>
+              <option value="table">Table</option>
+              <option value="position">Position</option>
+              <option value="pot">Pot</option>
+              <option value="net">Net</option>
+              <option value="wtsd">WTSD</option>
+            </select>
+            <button id="handsSortDirBtn" class="btn btn-ghost btn-tiny" title="Toggle ascending/descending">▼ Descending</button>
+          </div>
+          <div class="hands-table-wrap">
+            <table id="handsTable" class="data-table hands-data-table">
+              <colgroup>
+                <col id="colDate" style="width: 100px;">
+                <col id="colTime" style="width: 85px;">
+                <col id="colStakes" style="width: 90px;">
+                <col id="colTableCat" style="width: 140px;">
+                <col id="colBomb" style="width: 55px;">
+                <col id="colPos" style="width: 70px;">
+                <col id="colCards" style="width: 110px;">
+                <col id="colPot" style="width: 90px;">
+                <col id="colNet" style="width: 100px;">
+                <col id="colWtsd" style="width: 70px;">
+              </colgroup>
+              <thead>
+                <tr id="handsTableHeadRow"></tr>
+              </thead>
+              <tbody id="handsTableBody"></tbody>
+            </table>
+          </div>
+          <div class="hands-pagination">
+            <button id="handsPrevBtn" class="btn btn-ghost btn-tiny" disabled>‹ Prev</button>
+            <span id="handsPageLabel" class="hands-page-label"></span>
+            <button id="handsNextBtn" class="btn btn-ghost btn-tiny" disabled>Next ›</button>
+            <input type="number" id="handsJumpPage" class="hands-jump-input" min="1" placeholder="Page #" />
+            <button id="handsJumpBtn" class="btn btn-ghost btn-tiny">Go</button>
+            <select id="handsPageSizeSelect" class="hands-page-size">
+              <option value="10">10 / page</option>
+              <option value="25" selected>25 / page</option>
+              <option value="50">50 / page</option>
+              <option value="100">100 / page</option>
+            </select>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="tabGraph" class="tab-content">
+      <section id="advancedGraphSection" class="advanced-graph-section">
+        <div class="section-head">
+          <h2>Advanced Graph</h2>
+          <span id="advancedGraphLabel" class="stats-hero-label"></span>
+        </div>
+        <div class="graph-legend">
+          <span id="legendTotal" class="graph-legend-item"><span class="graph-legend-swatch swatch-total"></span>Total Profit</span>
+          <span id="legendShowdown" class="graph-legend-item"><span class="graph-legend-swatch swatch-showdown"></span>Went to Showdown</span>
+          <span id="legendNonShowdown" class="graph-legend-item"><span class="graph-legend-swatch swatch-nonshowdown"></span>No Showdown</span>
+        </div>
+        <div id="advancedGraphChart" class="advanced-graph-chart"></div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="app-footer">
+    <p id="statsCaveat" class="stats-caveat"></p>
+  </footer>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <div id="loadingOverlay" class="loading-overlay hidden">
+    <div class="spinner"></div>
+    <p id="loadingText" class="loading-text">Working…</p>
+  </div>
+
+  <script src="../src/chartMath.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

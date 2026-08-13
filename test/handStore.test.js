@@ -1,0 +1,496 @@
+'use strict';
+
+const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { openDatabase } = require('../src/db');
+const {
+  buildHandRecords, importFileIntoStore, queryHands, getDistinctValues, getHandById,
+  queryRawHandsForStats, getTotalHandCount, backfillDeepStats,
+} = require('../src/handStore');
+const { splitHands } = require('../src/converter');
+const { analyzeHand } = require('../src/stats');
+
+let passed = 0;
+function test(name, fn) {
+  fn();
+  passed++;
+  console.log('  ok  -', name);
+}
+
+function tmpDb() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'handstore-test-'));
+  return { db: openDatabase(path.join(dir, 'hands.db')), dir };
+}
+
+const HAND_A = `Weplay Hand #100:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 18:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kh]
+PlayerA: calls $0.25
+Hero: checks
+*** FLOP *** [2c 7d 9s]
+Hero: bets $1
+PlayerA: folds
+Uncalled bet ($1) returned to Hero
+*** SHOW DOWN ***
+Hero collected $1 from pot
+*** SUMMARY ***
+Total pot $1 | Rake $0
+Board [2c 7d 9s]
+Seat 1: PlayerA (small blind) folded on the Flop
+Seat 2: Hero (big blind) collected ($1)`;
+
+const HAND_B = `Weplay Hand #101:  Hold'em No Limit ($0.25/$0.50) - 2026/07/06 12:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: Hero ($50 in chips)
+Seat 2: PlayerB ($50 in chips)
+PlayerB: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerB: raises $1.5 to $1.5
+Hero: folds
+Uncalled bet ($1) returned to PlayerB
+*** SHOW DOWN ***
+PlayerB collected $2.25 from pot
+*** SUMMARY ***
+Total pot $2.25 | Rake $0
+Seat 1: Hero (big blind) folded before Flop
+Seat 2: PlayerB (small blind) collected ($2.25)`;
+
+const HAND_C = `Weplay Hand #102:  Hold'em No Limit ($0.50/$1) - 2026/07/07 09:00:00 UTC
+Table 'Test'(111) 8-max Seat #1 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: PlayerB ($100 in chips)
+PlayerB: posts small blind $0.5
+Hero: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [Ah Ad]
+PlayerB: folds
+Uncalled bet ($0.5) returned to Hero
+*** SHOW DOWN ***
+Hero collected $2 from pot
+*** SUMMARY ***
+Total pot $2 | Rake $0
+Seat 1: Hero (big blind) collected ($2)
+Seat 2: PlayerB (small blind) folded before Flop`;
+
+test('queryHands filters by table category, stakes, date range, and search', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}\n\n${HAND_C}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const byTable = queryHands(db, { tableCategory: '8max-ante' });
+  assert.strictEqual(byTable.total, 1);
+  assert.strictEqual(byTable.hands[0].handId, '102');
+
+  const byStake = queryHands(db, { stakesLabel: '$0.50/$1' });
+  assert.strictEqual(byStake.total, 1);
+  assert.strictEqual(byStake.hands[0].handId, '102');
+
+  const byDate = queryHands(db, { dateFrom: '2026-07-06' });
+  assert.strictEqual(byDate.total, 2);
+
+  const bySearch = queryHands(db, { search: '100' });
+  assert.strictEqual(bySearch.total, 1);
+  assert.strictEqual(bySearch.hands[0].handId, '100');
+});
+
+test('queryHands paginates via offset/limit and sorts newest-first by default', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const page1 = queryHands(db, { limit: 1, offset: 0 });
+  assert.strictEqual(page1.hands.length, 1);
+  assert.strictEqual(page1.hands[0].handId, '101', 'newest (2026-07-06) should sort first by default');
+  assert.strictEqual(page1.total, 2, 'total should reflect all matching hands, not just this page');
+
+  const page2 = queryHands(db, { limit: 1, offset: 1 });
+  assert.strictEqual(page2.hands[0].handId, '100');
+});
+
+test('queryHands can sort by net result (win/loss), ascending or descending', () => {
+  const { db } = tmpDb();
+  // HAND_A: hero wins (+$0.50). HAND_B: hero loses (-$0.50). HAND_C: hero wins (+$2, larger stake).
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}\n\n${HAND_C}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const worstFirst = queryHands(db, { sortBy: 'net', sortAsc: true });
+  assert.strictEqual(worstFirst.hands[0].handId, '101', 'the loss should sort first ascending');
+  assert.strictEqual(worstFirst.hands[2].handId, '102', 'the biggest win should sort last ascending');
+
+  const bestFirst = queryHands(db, { sortBy: 'net', sortAsc: false });
+  assert.strictEqual(bestFirst.hands[0].handId, '102', 'the biggest win should sort first descending');
+  assert.strictEqual(bestFirst.hands[2].handId, '101', 'the loss should sort last descending');
+});
+
+test('queryHands can sort by stakes numerically (not the text label), and by pot size', () => {
+  const { db } = tmpDb();
+  // HAND_A/HAND_B are $0.25/$0.50 (bb=0.5); HAND_C is $0.50/$1 (bb=1).
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}\n\n${HAND_C}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const byStakeAsc = queryHands(db, { sortBy: 'stakes', sortAsc: true });
+  assert.strictEqual(byStakeAsc.hands[2].handId, '102', 'the higher stake ($0.50/$1) should sort last ascending');
+
+  const byPotDesc = queryHands(db, { sortBy: 'pot', sortAsc: false });
+  assert.strictEqual(byPotDesc.hands[0].potSize, 2.25, 'HAND_B has the largest pot ($2.25)');
+});
+
+test('queryHands sort is stable across pages even when many rows tie on the sort column (e.g. a boolean-like field)', () => {
+  const { db } = tmpDb();
+  // Five hands all sharing wentToShowdown=false (only HAND_A reaches a real
+  // showdown) — sorting by wtsd with only two distinct values is exactly
+  // the case where an unstable sort could duplicate or skip rows across
+  // pages without a deterministic tiebreaker.
+  const hands = [HAND_A, HAND_B, HAND_C];
+  importFileIntoStore(db, hands.join('\n\n'), 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const page1 = queryHands(db, { sortBy: 'wtsd', sortAsc: false, limit: 2, offset: 0 });
+  const page2 = queryHands(db, { sortBy: 'wtsd', sortAsc: false, limit: 2, offset: 2 });
+  const ids1 = new Set(page1.hands.map((h) => h.handId));
+  const overlap = page2.hands.filter((h) => ids1.has(h.handId));
+  assert.strictEqual(overlap.length, 0, 'no hand should appear on more than one page');
+  assert.strictEqual(page1.hands.length + page2.hands.length, 3, 'every hand should appear exactly once across both pages');
+});
+
+test('getDistinctValues collects unique positions, stakes, and table categories', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}\n\n${HAND_C}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+  const dv = getDistinctValues(db);
+  assert.ok(dv.stakes.includes('$0.25/$0.50'));
+  assert.ok(dv.positions.length > 0);
+  assert.deepStrictEqual(dv.tableCategories, ['6max-ante', '8max-ante']);
+});
+
+test('getDistinctValues sorts stakes numerically, not lexicographically', () => {
+  const { db } = tmpDb();
+  // "$2/$4" vs "$10/$20" is a genuine counter-example for a naive string
+  // sort: lexicographically "1" < "2" puts "$10/$20" first, but numerically
+  // bb=4 < bb=20 means "$2/$4" must actually come first.
+  const highStakeHand = HAND_C
+    .replace('$0.50/$1', '$5/$10')
+    .replace('posts small blind $0.5', 'posts small blind $5')
+    .replace('posts big blind $1', 'posts big blind $10')
+    .replace('Weplay Hand #102', 'Weplay Hand #103');
+  importFileIntoStore(db, `${HAND_A}\n\n${highStakeHand}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+  const dv = getDistinctValues(db);
+  assert.deepStrictEqual(dv.stakes, ['$0.25/$0.50', '$5/$10']);
+});
+
+test('every seated player is stored, not just hero — the core requirement for viewing a hand you were not in', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+  const players = db.prepare('SELECT player_name, is_hero, seat, position, starting_stack FROM hand_players WHERE hand_id = ? ORDER BY seat').all('100');
+  assert.strictEqual(players.length, 2, 'both PlayerA and Hero should be stored');
+  assert.strictEqual(players[0].player_name, 'PlayerA');
+  assert.strictEqual(players[0].is_hero, 0);
+  assert.strictEqual(players[0].position, 'BTN', 'PlayerA is the button and posts SB in this heads-up hand — labeled BTN by the heads-up convention');
+  assert.strictEqual(players[1].player_name, 'Hero');
+  assert.strictEqual(players[1].is_hero, 1);
+  assert.strictEqual(players[1].position, 'BB');
+});
+
+test('queryHands: a player\'s perspective now includes every hand they were seated in, not just hands where they specifically imported their own file', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+  // A separate file where PlayerA is the one whose cards are revealed —
+  // their own export, imported on its own (natural auto-detection finds
+  // PlayerA as hero here, since this hand's own "Dealt to PlayerA" line
+  // says so).
+  const friendOwnHand = HAND_A
+    .replace('Weplay Hand #100', 'Weplay Hand #200')
+    .replace('Dealt to Hero', 'Dealt to PlayerA');
+  importFileIntoStore(db, friendOwnHand, 'friend_file.txt', { replaceHeroName: true }, splitHands);
+
+  // PlayerA's complete history is now both hands: #100 (where they were
+  // just a named opponent in Hero's own export) and #200 (their own
+  // export). Deep stats are computed for every seated player at import
+  // time now, not just whoever happened to be hero in a given file, so
+  // there's no reason to exclude #100 anymore — it's real data about
+  // PlayerA's own play, just sourced from someone else's file.
+  const forPlayerA = queryHands(db, { perspectivePlayer: 'PlayerA' });
+  assert.strictEqual(forPlayerA.total, 2);
+  const handIds = forPlayerA.hands.map((h) => h.handId).sort();
+  assert.deepStrictEqual(handIds, ['100', '200']);
+});
+
+test("queryHands: a player who's never been hero anywhere (only ever an opponent) still returns their hands, with real computed stats — not zero", () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+  // PlayerA appears in hand #100 only as a named opponent — Hero is the
+  // one whose cards are known there — and PlayerA's own file was never
+  // imported. Their net/VPIP/PFR/etc are still real, computed values
+  // (analyzeHand takes a player name, it isn't hardcoded to "hero"), not
+  // null placeholders and not an empty result.
+  const forPlayerA = queryHands(db, { perspectivePlayer: 'PlayerA' });
+  assert.strictEqual(forPlayerA.total, 1);
+  assert.strictEqual(forPlayerA.hands[0].handId, '100');
+  assert.strictEqual(typeof forPlayerA.hands[0].net, 'number', 'PlayerA has a real, computed net result, not null');
+});
+
+test('re-importing the same file is idempotent: updates in place, never duplicates, hand_players rows stay consistent', () => {
+  const { db } = tmpDb();
+  const r1 = importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+  assert.strictEqual(r1.added, 2);
+  assert.strictEqual(r1.updated, 0);
+
+  const r2 = importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+  assert.strictEqual(r2.added, 0);
+  assert.strictEqual(r2.updated, 2);
+
+  const handCount = db.prepare('SELECT COUNT(*) AS c FROM hands').get().c;
+  const playerCount = db.prepare('SELECT COUNT(*) AS c FROM hand_players').get().c;
+  assert.strictEqual(handCount, 2);
+  assert.strictEqual(playerCount, 4, '2 players per hand x 2 hands — no stale or duplicated rows from re-import');
+});
+
+test("getHandById returns hand-level fields plus that hand's hero player fields, including raw text", () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+  const detail = getHandById(db, '100');
+  assert.ok(detail);
+  assert.strictEqual(detail.handId, '100');
+  assert.strictEqual(detail.stakesLabel, '$0.25/$0.50');
+  assert.strictEqual(detail.position, 'BB');
+  assert.strictEqual(detail.net, 0.5);
+  assert.ok(detail.raw.includes('Weplay Hand #100'));
+  assert.strictEqual(getHandById(db, 'no-such-hand'), null);
+});
+
+test('getHandById: a perspectivePlayer argument returns that specific player\'s row, not whichever player was hero in the source file — the gap found while wiring up "view any player"', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+  // HAND_A: Hero is hero (position BB, net 0.5); PlayerA is the opponent
+  // (folded on the flop). Without a perspectivePlayer, this hand's own
+  // file hero is returned, same as before.
+  const defaultDetail = getHandById(db, '100');
+  assert.strictEqual(defaultDetail.playerName, 'Hero');
+  assert.strictEqual(defaultDetail.position, 'BB');
+
+  // With perspectivePlayer, PlayerA's own row comes back instead — their
+  // own position/net, not Hero's, even though Hero is the one who was
+  // is_hero=1 when this file was imported. HAND_A is heads-up, where the
+  // small-blind poster is correctly labeled "BTN" per this project's own
+  // established heads-up position convention (see the regression test in
+  // stats.test.js), not "SB".
+  const playerADetail = getHandById(db, '100', 'PlayerA');
+  assert.strictEqual(playerADetail.playerName, 'PlayerA');
+  assert.strictEqual(playerADetail.position, 'BTN');
+  assert.notStrictEqual(playerADetail.net, defaultDetail.net, 'PlayerA and Hero have different, independently computed net results for the same hand');
+});
+
+test("queryRawHandsForStats returns raw text keyed to each hand's own hero, skipping skipped hands", () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+  const rows = queryRawHandsForStats(db, {});
+  assert.strictEqual(rows.length, 2);
+  assert.ok(rows.every((r) => r.playerName === 'Hero'));
+});
+
+test('reopening the same database file preserves everything written to it', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'handstore-test-'));
+  const dbPath = path.join(dir, 'hands.db');
+  const db1 = openDatabase(dbPath);
+  importFileIntoStore(db1, `${HAND_A}\n\n${HAND_B}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+  db1.close();
+
+  const db2 = openDatabase(dbPath);
+  const q = queryHands(db2, {});
+  assert.strictEqual(q.total, 2);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a hand with an unparseable header returns null, not a broken record', () => {
+  const r = buildHandRecords('not a real hand history at all', 'file1.txt', {});
+  assert.strictEqual(r, null);
+});
+
+// A genuine showdown where hero's cards ARE shown — bb=$1, pot=$40 (40bb).
+const HAND_SHOWN = `Weplay Hand #300:  Hold'em No Limit ($0.5/$1) - 2026/07/08 10:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: PlayerB ($100 in chips)
+Hero: posts small blind $0.5
+PlayerB: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [Ah Ad]
+Hero: raises $19 to $19.5
+PlayerB: calls $18.5
+*** FLOP *** [2c 7d 9s]
+PlayerB: checks
+Hero: checks
+*** SHOW DOWN ***
+Hero: shows [Ah Ad] (One Pair)
+PlayerB: shows [Kc Kd] (One Pair)
+Hero collected $40 from pot
+*** SUMMARY ***
+Total pot $40 | Rake $0
+Board [2c 7d 9s]
+Seat 1: Hero (small blind) showed [Ah Ad] and won ($40) with One Pair
+Seat 2: PlayerB (big blind) showed [Kc Kd] and lost with One Pair`;
+
+// Hero wins uncontested, no shows line — bb=$1, pot=$3 (3bb, a small steal).
+const HAND_NOT_SHOWN = `Weplay Hand #301:  Hold'em No Limit ($0.5/$1) - 2026/07/08 11:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: PlayerB ($100 in chips)
+Hero: posts small blind $0.5
+PlayerB: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+Hero: raises $2.5 to $3
+PlayerB: folds
+Uncalled bet ($2) returned to Hero
+*** SHOW DOWN ***
+Hero collected $3 from pot
+*** SUMMARY ***
+Total pot $3 | Rake $0
+Seat 1: Hero (small blind) collected ($3)
+Seat 2: PlayerB (big blind) folded before Flop`;
+
+test('queryHands: "Went to showdown" filter is three-way (shown / not-shown / both), not a boolean checkbox', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_SHOWN}\n\n${HAND_NOT_SHOWN}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const shown = queryHands(db, { wentToShowdown: 'shown' });
+  assert.strictEqual(shown.total, 1);
+  assert.strictEqual(shown.hands[0].handId, '300');
+
+  const notShown = queryHands(db, { wentToShowdown: 'not-shown' });
+  assert.strictEqual(notShown.total, 1);
+  assert.strictEqual(notShown.hands[0].handId, '301');
+
+  const both = queryHands(db, {});
+  assert.strictEqual(both.total, 2, 'no wentToShowdown filter (or any other value) should return everything');
+});
+
+test('queryHands: pot size filter, in big blinds, converts against each hand\'s own bb_stake', () => {
+  const { db } = tmpDb();
+  // HAND_SHOWN: 40bb pot. HAND_NOT_SHOWN: 3bb pot.
+  importFileIntoStore(db, `${HAND_SHOWN}\n\n${HAND_NOT_SHOWN}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const midRange = queryHands(db, { potBbMin: 10, potBbMax: 60 });
+  assert.strictEqual(midRange.total, 1, 'only the 40bb pot should match a 10-60bb range');
+  assert.strictEqual(midRange.hands[0].handId, '300');
+
+  const smallRange = queryHands(db, { potBbMax: 5 });
+  assert.strictEqual(smallRange.total, 1, 'only the 3bb pot should match a max-5bb filter');
+  assert.strictEqual(smallRange.hands[0].handId, '301');
+
+  const noneMatch = queryHands(db, { potBbMin: 100 });
+  assert.strictEqual(noneMatch.total, 0, 'neither pot reaches 100bb');
+});
+
+test('getTotalHandCount reflects incremental imports — the exact scenario behind the "tabs show stale counts" bug report', () => {
+  const { db } = tmpDb();
+  assert.strictEqual(getTotalHandCount(db), 0, 'empty database starts at zero');
+
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+  assert.strictEqual(getTotalHandCount(db), 1, 'reflects the first import immediately');
+
+  // A second, separate import onto the same already-populated database —
+  // the actual scenario reported: importing more hands after some are
+  // already there, not a fresh database.
+  importFileIntoStore(db, HAND_B, 'file2.txt', { replaceHeroName: true }, splitHands);
+  assert.strictEqual(getTotalHandCount(db), 2, 'reflects the incremental import too, not just the first batch');
+
+  // Re-importing the same file again must not double-count (idempotent
+  // import, already established elsewhere) — the total should stay exactly
+  // where it was, not grow just because the same data was seen twice.
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+  assert.strictEqual(getTotalHandCount(db), 2);
+});
+
+test('queryHands: Saw Flop filter (both/yes/no) — reusing HAND_SHOWN (sees a flop) and HAND_NOT_SHOWN (folds out preflop, no flop at all)', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_SHOWN}\n\n${HAND_NOT_SHOWN}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const sawFlopYes = queryHands(db, { sawFlop: 'yes' });
+  assert.strictEqual(sawFlopYes.total, 1);
+  assert.strictEqual(sawFlopYes.hands[0].handId, '300');
+
+  const sawFlopNo = queryHands(db, { sawFlop: 'no' });
+  assert.strictEqual(sawFlopNo.total, 1);
+  assert.strictEqual(sawFlopNo.hands[0].handId, '301');
+
+  const both = queryHands(db, {});
+  assert.strictEqual(both.total, 2, 'no sawFlop filter (or any other value) should return everything');
+});
+
+test('backfillDeepStats: fixes the saw_flop-specific gap — hero rows imported before saw_flop existed have it NULL, not false, which made both "yes" and "no" filters return zero', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_SHOWN}\n\n${HAND_NOT_SHOWN}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  // Simulate "imported before this column existed" — exactly what
+  // ALTER TABLE ADD COLUMN actually does to already-existing rows.
+  db.exec('UPDATE hand_players SET saw_flop = NULL WHERE is_hero = 1');
+
+  const beforeYes = queryHands(db, { sawFlop: 'yes' });
+  const beforeNo = queryHands(db, { sawFlop: 'no' });
+  assert.strictEqual(beforeYes.total, 0, 'reproduces the reported bug: NULL matches neither yes...');
+  assert.strictEqual(beforeNo.total, 0, '...nor no');
+
+  const backfilled = backfillDeepStats(db, analyzeHand);
+  assert.strictEqual(backfilled, 2);
+
+  const afterYes = queryHands(db, { sawFlop: 'yes' });
+  const afterNo = queryHands(db, { sawFlop: 'no' });
+  assert.strictEqual(afterYes.total, 1);
+  assert.strictEqual(afterYes.hands[0].handId, '300');
+  assert.strictEqual(afterNo.total, 1);
+  assert.strictEqual(afterNo.hands[0].handId, '301');
+
+  // Idempotent — a second call on an already-backfilled database does
+  // nothing, so this can safely run on every app launch.
+  assert.strictEqual(backfillDeepStats(db, analyzeHand), 0);
+});
+
+test('backfillDeepStats: also fixes the broader gap — non-hero rows imported before deep stats were generalized to every seated player, where net itself was never computed at all', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  // Simulate "imported before non-hero deep stats existed" — every
+  // opponent row's net (and everything else) starts out NULL, exactly
+  // like a database populated by the version of this app before
+  // buildHandRecords computed stats for every seated player.
+  db.exec('UPDATE hand_players SET net = NULL, vpip = NULL, pfr = NULL, saw_flop = NULL, hand_category = NULL WHERE is_hero = 0');
+
+  const opponentRow = db.prepare("SELECT net FROM hand_players WHERE player_name = 'PlayerA'").get();
+  assert.strictEqual(opponentRow.net, null, 'reproduces the gap: PlayerA (never hero) has no computed net at all');
+
+  const backfilled = backfillDeepStats(db, analyzeHand);
+  assert.ok(backfilled > 0);
+
+  const afterRow = db.prepare("SELECT net FROM hand_players WHERE player_name = 'PlayerA'").get();
+  assert.strictEqual(typeof afterRow.net, 'number', 'PlayerA now has a real, computed net result');
+
+  assert.strictEqual(backfillDeepStats(db, analyzeHand), 0, 'idempotent, same as the narrower gap above');
+});
+
+test('export round-trip: hands exported via queryRawHandsForStats (the same building block main.js\'s export handler uses) are genuinely re-importable, not just well-formed-looking text', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}\n\n${HAND_C}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  // Export everything (no filter) — the "Weplay original" format path.
+  const rows = queryRawHandsForStats(db, {});
+  assert.strictEqual(rows.length, 3);
+  const combinedText = rows.map((r) => r.rawText).join('\n\n');
+
+  // The real correctness bar: re-importing the exported text into a fresh
+  // database must produce exactly the same hands, not just parse without
+  // throwing. This is the actual scenario a colleague receiving an
+  // exported file would hit.
+  const { db: freshDb } = tmpDb();
+  const result = importFileIntoStore(freshDb, combinedText, 'reimported.txt', { replaceHeroName: true }, splitHands);
+  assert.strictEqual(result.added, 3);
+  assert.strictEqual(result.skipped, 0);
+
+  const reimportedTotal = queryHands(freshDb, {});
+  assert.strictEqual(reimportedTotal.total, 3);
+});
+
+console.log(`\n${passed} test(s) passed.`);

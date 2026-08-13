@@ -1,0 +1,490 @@
+'use strict';
+
+const fs = require('fs');
+const { convertHand } = require('./converter');
+const { analyzeHand } = require('./stats');
+const { computeHandEVAdjustment } = require('./evAnalysis');
+const { buildHandReplay } = require('./handReplay');
+
+// ── Building storable records for one hand ──────────────────────────────
+// One row for the hand itself (src/db.js's `hands` table), plus one row per
+// seated player (`hand_players`) — see src/db.js for why it's split this
+// way. Reuses handReplay.js for the full seat list (every player, not just
+// hero) rather than re-deriving it, and stats.js for every player's deep
+// stats (net, VPIP, PFR, hand category, saw flop) — not hero-only anymore,
+// see the comment inside buildHandRecords for how that changed. EV
+// adjustment (src/evAnalysis.js) remains hero-only.
+
+function buildHandRecords(rawBlock, sourceFile, options) {
+  const heroOverride = (options && options.heroName) || null;
+  const replay = buildHandReplay(rawBlock, heroOverride);
+  if (!replay) return null; // unparseable header, or no resolution anywhere in the source
+
+  const convertResult = convertHand(rawBlock, options);
+  const statsResult = analyzeHand(rawBlock, heroOverride);
+  // EV adjustment (src/evAnalysis.js) is computed once, here, at import time
+  // — not on every Stats tab visit. See that module and the Stats tab
+  // caveat text for why: it can take up to roughly a second per qualifying
+  // hand (Monte Carlo sampling for a preflop all-in), fine as a one-time
+  // import cost, not something to repeat on every stats view.
+  const evResult = computeHandEVAdjustment(rawBlock, heroOverride);
+
+  const wonNames = new Set(replay.winners.map((w) => w.name));
+  const showdownByName = new Map(replay.showdown.map((s) => [s.name, s]));
+
+  const stakesMatch = /^\$([0-9.]+)\/\$([0-9.]+)$/.exec(replay.stakesLabel || '');
+  const sbStake = stakesMatch ? parseFloat(stakesMatch[1]) : null;
+  const bbStake = stakesMatch ? parseFloat(stakesMatch[2]) : null;
+  // Total pot / rake are read directly off the raw text (the same figures
+  // Weplay itself states — pre-rake pot size), rather than reconstructed
+  // from the rake-adjusted winners list, which is a different number.
+  const potMatch = /^Total pot \$([0-9.]+)/m.exec(rawBlock);
+  const rakeMatch = /\|\s*Rake \$([0-9.]+)/.exec(rawBlock);
+
+  const hand = {
+    handId: replay.handId,
+    sourceFile,
+    importedAt: Date.now(),
+    date: replay.dateTime ? replay.dateTime.slice(0, 10).replace(/\//g, '-') : null,
+    time: replay.dateTime ? replay.dateTime.slice(11) : null,
+    sbStake,
+    bbStake,
+    stakesLabel: replay.stakesLabel,
+    maxSeats: replay.maxSeats,
+    tableType: replay.tableType,
+    tableCategory: `${replay.maxSeats}max-${replay.tableType}`,
+    isRunTwice: replay.isRunTwice ? 1 : 0,
+    board: [replay.streets.flop, replay.streets.turn, replay.streets.river]
+      .filter(Boolean).flatMap((s) => s.board).join(' ') || null,
+    potSize: potMatch ? parseFloat(potMatch[1]) : null,
+    rake: rakeMatch ? parseFloat(rakeMatch[1]) : null,
+    skipped: convertResult.skipped ? 1 : 0,
+    skipReason: convertResult.skipped ? convertResult.skipReason : null,
+    rawText: rawBlock,
+  };
+
+  const players = replay.players.map((p) => {
+    const isHero = p.isHero;
+    const shown = showdownByName.get(p.name);
+    // Deep stats are now computed for every seated player, not just hero —
+    // analyzeHand takes a player name as a parameter, it was never actually
+    // hardcoded to "hero" specifically, so this is the exact same function
+    // already used for hero, just called once per player instead of once
+    // per hand (reusing the already-computed statsResult for hero, to
+    // avoid redundant work). Verified this doesn't meaningfully slow down
+    // import: ~0.66ms/hand even analyzing all seated players on a real
+    // 8-max table, extrapolating to about 15 extra seconds across this
+    // project's entire 22,888-hand batch — not the "generalize the whole
+    // engine" undertaking this module's own header comment once assumed
+    // it would be. EV adjustment stays hero-only for now — a separate,
+    // more involved generalization (src/evAnalysis.js), deliberately not
+    // bundled into this change.
+    const playerStats = isHero ? statsResult : analyzeHand(rawBlock, p.name);
+    return {
+      handId: replay.handId,
+      playerName: p.name,
+      isHero: isHero ? 1 : 0,
+      seat: p.seat,
+      position: p.position === '—' ? null : p.position,
+      startingStack: p.stackBB,
+      holeCards: isHero ? replay.heroCards : (shown ? shown.cards : null),
+      net: playerStats ? playerStats.net : null,
+      vpip: playerStats ? (playerStats.vpip ? 1 : 0) : null,
+      pfr: playerStats ? (playerStats.pfr ? 1 : 0) : null,
+      sawFlop: playerStats ? (playerStats.sawFlop ? 1 : 0) : null,
+      handCategory: playerStats ? playerStats.handCategory : null,
+      // Cheap and correct for ANY player, not just hero — both read directly
+      // off the hand's own showdown/winners data.
+      wentToShowdown: showdownByName.has(p.name) ? 1 : 0,
+      won: wonNames.has(p.name) ? 1 : 0,
+      evAdjustmentBB: isHero && evResult ? evResult.adjustmentBB : null,
+    };
+  });
+
+  return { hand, players };
+}
+
+/**
+ * Regenerates a hand's CoinPoker-format text on demand from its raw text,
+ * for the detail viewer. Not persisted — computed on demand instead.
+ */
+function getConvertedText(rawText, options) {
+  if (!rawText) return null;
+  const result = convertHand(rawText, options);
+  return result.skipped ? null : result.text;
+}
+
+// ── Import ───────────────────────────────────────────────────────────────
+
+const UPSERT_HAND_SQL = `
+  INSERT OR REPLACE INTO hands
+    (hand_id, source_file, imported_at, date, time, sb_stake, bb_stake, stakes_label,
+     max_seats, table_type, table_category, is_run_twice, board, pot_size, rake,
+     skipped, skip_reason, raw_text)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`;
+
+const DELETE_PLAYERS_SQL = 'DELETE FROM hand_players WHERE hand_id = ?';
+
+const INSERT_PLAYER_SQL = `
+  INSERT INTO hand_players
+    (hand_id, player_name, is_hero, seat, position, starting_stack, hole_cards,
+     net, vpip, pfr, saw_flop, hand_category, went_to_showdown, won, ev_adjustment_bb)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`;
+
+/**
+ * Imports every hand from a raw Weplay file into the database, keyed by
+ * hand ID so re-importing the same file (or an overlapping export) safely
+ * updates rather than duplicates — each hand's player rows are fully
+ * replaced (not merged) on re-import, so a hand's data never mixes stale
+ * and fresh rows. Wrapped in one transaction per file: importing thousands
+ * of hands as individually-committed statements measurably slower and adds
+ * no correctness benefit here.
+ */
+function importFileIntoStore(db, rawText, sourceFile, options, splitHandsFn) {
+  const blocks = splitHandsFn(rawText);
+  let added = 0, updated = 0, skippedCount = 0;
+
+  const upsertHand = db.prepare(UPSERT_HAND_SQL);
+  const deletePlayers = db.prepare(DELETE_PLAYERS_SQL);
+  const insertPlayer = db.prepare(INSERT_PLAYER_SQL);
+  const checkExists = db.prepare('SELECT 1 FROM hands WHERE hand_id = ?');
+
+  db.exec('BEGIN');
+  try {
+    for (const block of blocks) {
+      const built = buildHandRecords(block, sourceFile, options);
+      if (!built) { skippedCount++; continue; }
+      const { hand: h, players } = built;
+
+      const exists = checkExists.get(h.handId);
+      if (exists) updated++; else added++;
+
+      upsertHand.run(
+        h.handId, h.sourceFile, h.importedAt, h.date, h.time, h.sbStake, h.bbStake,
+        h.stakesLabel, h.maxSeats, h.tableType, h.tableCategory, h.isRunTwice, h.board,
+        h.potSize, h.rake, h.skipped, h.skipReason, h.rawText,
+      );
+      deletePlayers.run(h.handId);
+      for (const p of players) {
+        insertPlayer.run(
+          p.handId, p.playerName, p.isHero, p.seat, p.position, p.startingStack,
+          p.holeCards, p.net, p.vpip, p.pfr, p.sawFlop, p.handCategory, p.wentToShowdown, p.won,
+          p.evAdjustmentBB,
+        );
+      }
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  return { added, updated, skipped: skippedCount, total: blocks.length };
+}
+
+// ── Querying ─────────────────────────────────────────────────────────────
+// Every query joins hands to hand_players filtered to one player's
+// perspective — defaults to is_hero = 1 (whoever's hole cards were visible
+// in each hand's own source file), or a specific named player when given.
+// Any recognized player can be selected this way now, not just imported
+// heroes — see getAllPlayerNames for the dropdown this feeds.
+
+function buildWhereClause(f) {
+  const params = [];
+  const clauses = [];
+  // "Perspective" means "this player's complete hand history" — every hand
+  // they were seated in, regardless of which file that data came from (their
+  // own export, where they're is_hero=1, or someone else's export where
+  // they're just a named opponent). Used to require is_hero=1 specifically,
+  // back when deep stats (net, VPIP, PFR, hand category, saw flop) were only
+  // ever computed for whoever was hero in that specific file — now that
+  // every seated player gets those computed at import time (see
+  // buildHandRecords), that restriction isn't needed for correctness, and
+  // dropping it is what actually makes "view any recognized player, not
+  // just imported heroes" work: petit_blaireau's own hand history and
+  // Javolimpero's hands where he happened to sit across from petit are
+  // both just "player_name = ?" now, no different in kind.
+  if (f.perspectivePlayer) {
+    clauses.push('hp.player_name = ?');
+    params.push(f.perspectivePlayer);
+  } else {
+    clauses.push('hp.is_hero = 1');
+  }
+  if (f.dateFrom) { clauses.push('h.date >= ?'); params.push(f.dateFrom); }
+  if (f.dateTo) { clauses.push('h.date <= ?'); params.push(f.dateTo); }
+  if (f.tableCategory) { clauses.push('h.table_category = ?'); params.push(f.tableCategory); }
+  if (f.stakesLabel) { clauses.push('h.stakes_label = ?'); params.push(f.stakesLabel); }
+  if (f.position) { clauses.push('hp.position = ?'); params.push(f.position); }
+  if (f.handCategory) { clauses.push('hp.hand_category = ?'); params.push(f.handCategory); }
+  // Three-way, not a checkbox: "shown" / "not-shown" / anything else (both,
+  // no filter). hp.went_to_showdown uses the exact same "were this
+  // player's cards genuinely shown" definition as the Advanced Graph's
+  // blue/red split (src/stats.js's heroCardsShown) — both independently
+  // check for a real `shows` line with valid (non-redacted) cards, kept in
+  // sync deliberately after finding a real discrepancy between them.
+  if (f.wentToShowdown === 'shown') { clauses.push('hp.went_to_showdown = 1'); }
+  else if (f.wentToShowdown === 'not-shown') { clauses.push('hp.went_to_showdown = 0'); }
+  // Saw Flop — three-way, same "both / yes / no" shape as the showdown
+  // filter. Distinguishes whether hero saw a flop at all (called or raised
+  // preflop and stayed in) from folding preflop before ever reaching one.
+  if (f.sawFlop === 'yes') { clauses.push('hp.saw_flop = 1'); }
+  else if (f.sawFlop === 'no') { clauses.push('hp.saw_flop = 0'); }
+  // Pot size filter, in big blinds — converted against each hand's own
+  // bb_stake rather than a fixed dollar figure, since "10 to 25bb" means a
+  // different dollar range at every stake.
+  if (f.potBbMin != null && f.potBbMin !== '') { clauses.push('h.pot_size >= h.bb_stake * ?'); params.push(parseFloat(f.potBbMin)); }
+  if (f.potBbMax != null && f.potBbMax !== '') { clauses.push('h.pot_size <= h.bb_stake * ?'); params.push(parseFloat(f.potBbMax)); }
+  if (f.search) {
+    clauses.push('(h.hand_id LIKE ? OR h.source_file LIKE ? OR hp.hole_cards LIKE ?)');
+    const needle = `%${f.search}%`;
+    params.push(needle, needle, needle);
+  }
+  return { where: clauses.join(' AND '), params };
+}
+
+// Sorting by stakes uses the actual numeric bb_stake column, not the text
+// label — the same lexicographic-sort trap fixed elsewhere in this app
+// ("$10/$20" sorting before "$2/$4" as plain text) applies here too if
+// sorted by the label string instead of the number it represents.
+const SORT_COLUMNS = {
+  date: "(h.date || ' ' || h.time)",
+  net: 'hp.net',
+  stakes: 'h.bb_stake',
+  table: 'h.table_category',
+  position: 'hp.position',
+  pot: 'h.pot_size',
+  wtsd: 'hp.went_to_showdown',
+};
+
+/**
+ * Filters and sorts hands for the hand-list view. Returns lightweight
+ * summary rows (no raw text — fetched separately per-hand for the detail
+ * window) via a paginated SQL query, so a multi-hundred-thousand-hand
+ * database only ever touches the one page actually being displayed.
+ */
+function queryHands(db, filters) {
+  const f = filters || {};
+  const { where, params } = buildWhereClause(f);
+
+  const sortCol = SORT_COLUMNS[f.sortBy] || SORT_COLUMNS.date;
+  const sortDir = f.sortAsc ? 'ASC' : 'DESC';
+  const limit = f.limit || 200;
+  const offset = f.offset || 0;
+
+  const totalRow = db.prepare(`SELECT COUNT(*) AS c FROM hands h JOIN hand_players hp ON hp.hand_id = h.hand_id WHERE ${where}`).get(...params);
+  const total = totalRow.c;
+
+  const rows = db.prepare(`
+    SELECT h.hand_id AS handId, h.date, h.time, h.stakes_label AS stakesLabel,
+           h.table_type AS tableType, h.table_category AS tableCategory,
+           hp.position, hp.hand_category AS handCategory, hp.hole_cards AS heroCards,
+           hp.net, h.pot_size AS potSize, hp.went_to_showdown AS wentToShowdown,
+           hp.saw_flop AS sawFlop, hp.won, h.source_file AS sourceFile, h.skipped
+    FROM hands h JOIN hand_players hp ON hp.hand_id = h.hand_id
+    WHERE ${where}
+    ORDER BY ${sortCol} ${sortDir}, h.hand_id ${sortDir}
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset);
+
+  // node:sqlite returns 0/1 for booleans and null-prototype row objects —
+  // normalize both so the renderer can use them exactly like before.
+  const hands = rows.map((r) => ({
+    ...r,
+    wentToShowdown: !!r.wentToShowdown,
+    sawFlop: r.sawFlop == null ? null : !!r.sawFlop,
+    won: !!r.won,
+    skipped: !!r.skipped,
+  }));
+
+  return { hands, total, offset, limit };
+}
+
+/**
+ * Every distinct player who has ever been "hero" in this database — i.e.
+ * whose own hand history file was imported at least once (their hole cards
+ * were the ones revealed) — with a hand count for each. This is the list
+ * for the perspective selector: "whose hands/stats am I looking at",
+ * distinct from the much larger set of every opponent name ever seen
+ * sitting at a table, which wouldn't be a meaningful list to pick from.
+ */
+function getHeroPlayerNames(db) {
+  return db.prepare(`
+    SELECT player_name AS name, COUNT(*) AS handCount
+    FROM hand_players
+    WHERE is_hero = 1
+    GROUP BY player_name
+    ORDER BY handCount DESC
+  `).all();
+}
+
+/**
+ * Every distinct player ever seated in any imported hand — not just the
+ * heroes getHeroPlayerNames returns, every recognized opponent too. Feeds
+ * the perspective dropdown now that deep stats (net, VPIP, PFR, hand
+ * category, saw flop) are computed for every seated player at import time,
+ * not just whoever happened to be hero in that specific file — so any name
+ * on this list is a real, viewable perspective, not just a name that
+ * happens to appear at a table.
+ */
+function getAllPlayerNames(db) {
+  return db.prepare(`
+    SELECT player_name AS name, COUNT(*) AS handCount
+    FROM hand_players
+    GROUP BY player_name
+    ORDER BY handCount DESC
+  `).all();
+}
+
+/**
+ * Grand total hand count across the entire database — every hero, every
+ * filter ignored. Unambiguous by construction, unlike the "added/updated/
+ * skipped" counts a single import batch returns (which only ever reflect
+ * that one batch, not the database as a whole) — meant specifically to
+ * give the person a number they can directly compare against whatever a
+ * filtered view shows afterward, since those two numbers legitimately
+ * differing (e.g. a filtered perspective vs. the whole database) is a very
+ * different situation from a stale UI, and this is what makes the
+ * difference checkable at a glance instead of a guess.
+ */
+function getTotalHandCount(db) {
+  return db.prepare('SELECT COUNT(*) AS n FROM hands WHERE skipped = 0').get().n;
+}
+
+/**
+ * Backfills deep stats (net, VPIP, PFR, hand category, saw flop) for any
+ * row that predates them being computed for that player. Two real,
+ * distinct gaps this covers in one pass: (1) every non-hero row from
+ * before deep stats were generalized to all seated players, not just
+ * hero — those have net itself still NULL, never computed at all; and
+ * (2) hero rows imported between when saw_flop was added and now, which
+ * have net/VPIP/PFR populated but saw_flop specifically still NULL (the
+ * original, narrower version of this backfill only covered that second
+ * case — this supersedes it, catching both in one query and one pass
+ * instead of running two overlapping backfills on every startup). A NULL
+ * net/saw_flop doesn't mean "zero" or "no" — the filter clauses (e.g.
+ * `saw_flop = 1` / `= 0`) correctly match neither for a NULL row, which is
+ * exactly why an un-backfilled database returns zero results for every
+ * value of a filter built on a column that was never actually computed.
+ * Recomputed here from each hand's own stored raw_text (already in the
+ * database — no re-import needed); analyzeHandFn is passed in rather than
+ * required directly so this module doesn't need a hard dependency on
+ * stats.js, matching the same pattern importFileIntoStore already uses for
+ * splitHandsFn. Idempotent and cheap to call on every startup — verified
+ * against this project's real 22,888-hand batch at ~1.3s; once every row
+ * has been backfilled, the SELECT finds nothing left to do and this
+ * becomes a fast no-op.
+ */
+function backfillDeepStats(db, analyzeHandFn) {
+  const rows = db.prepare(`
+    SELECT hp.hand_id AS handId, hp.player_name AS playerName, h.raw_text AS rawText
+    FROM hand_players hp JOIN hands h ON h.hand_id = hp.hand_id
+    WHERE (hp.net IS NULL OR hp.saw_flop IS NULL) AND h.skipped = 0
+  `).all();
+  if (rows.length === 0) return 0;
+
+  const update = db.prepare(`
+    UPDATE hand_players SET net = ?, vpip = ?, pfr = ?, saw_flop = ?, hand_category = ?
+    WHERE hand_id = ? AND player_name = ?
+  `);
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      const analyzed = analyzeHandFn(r.rawText, r.playerName);
+      update.run(
+        analyzed ? analyzed.net : null,
+        analyzed ? (analyzed.vpip ? 1 : 0) : null,
+        analyzed ? (analyzed.pfr ? 1 : 0) : null,
+        analyzed ? (analyzed.sawFlop ? 1 : 0) : null,
+        analyzed ? analyzed.handCategory : null,
+        r.handId, r.playerName,
+      );
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return rows.length;
+}
+
+function getDistinctValues(db, filters) {
+  const f = filters || {};
+  const { where, params } = buildWhereClause({ perspectivePlayer: f.perspectivePlayer });
+  const positions = db.prepare(`SELECT DISTINCT hp.position AS v FROM hands h JOIN hand_players hp ON hp.hand_id = h.hand_id WHERE ${where} AND hp.position IS NOT NULL`).all(...params).map((r) => r.v);
+  const stakes = db.prepare(`SELECT DISTINCT h.stakes_label AS v FROM hands h JOIN hand_players hp ON hp.hand_id = h.hand_id WHERE ${where} AND h.stakes_label IS NOT NULL`).all(...params).map((r) => r.v);
+  const tableCategories = db.prepare(`SELECT DISTINCT h.table_category AS v FROM hands h JOIN hand_players hp ON hp.hand_id = h.hand_id WHERE ${where} AND h.table_category IS NOT NULL`).all(...params).map((r) => r.v);
+
+  const sortedStakes = stakes.sort((a, b) => {
+    const bbOf = (label) => parseFloat((/\/\$([0-9.]+)/.exec(label) || [, '0'])[1]);
+    return bbOf(a) - bbOf(b);
+  });
+  return { positions: positions.sort(), stakes: sortedStakes, tableCategories: tableCategories.sort() };
+}
+
+/**
+ * Every raw hand row for a given perspective (hero by default, or a named
+ * player), matching the same filters as queryHands — used to feed the
+ * stats engine so Stats reflects exactly the same filtered set the Hands
+ * tab is showing, not the whole unfiltered database.
+ */
+function queryRawHandsForStats(db, filters) {
+  const f = filters || {};
+  const { where, params } = buildWhereClause(f);
+  const rows = db.prepare(`
+    SELECT h.raw_text AS rawText, hp.player_name AS playerName, hp.net, h.bb_stake AS bbStake,
+           hp.ev_adjustment_bb AS evAdjustmentBB, h.stakes_label AS stakesLabel
+    FROM hands h JOIN hand_players hp ON hp.hand_id = h.hand_id
+    WHERE ${where} AND h.skipped = 0
+  `).all(...params);
+  return rows;
+}
+
+/**
+ * Fetches one full hand by ID — hand-level fields plus a specific player's
+ * row (their position, cards if known, net, etc) — for the detail
+ * sub-window. perspectivePlayer selects which seated player's row to use;
+ * defaults to whoever was hero in that hand's own source file if omitted,
+ * matching the original behavior for any caller that doesn't care which
+ * player. Includes the raw text (needed there to regenerate converted
+ * text / build the replay).
+ */
+function getHandById(db, handId, perspectivePlayer) {
+  const hand = db.prepare('SELECT * FROM hands WHERE hand_id = ?').get(handId);
+  if (!hand) return null;
+  const player = perspectivePlayer
+    ? db.prepare('SELECT * FROM hand_players WHERE hand_id = ? AND player_name = ?').get(handId, perspectivePlayer)
+    : db.prepare('SELECT * FROM hand_players WHERE hand_id = ? AND is_hero = 1').get(handId);
+  return {
+    handId: hand.hand_id,
+    sourceFile: hand.source_file,
+    date: hand.date,
+    time: hand.time,
+    stakesLabel: hand.stakes_label,
+    maxSeats: hand.max_seats,
+    tableType: hand.table_type,
+    tableCategory: hand.table_category,
+    board: hand.board,
+    potSize: hand.pot_size,
+    raw: hand.raw_text,
+    skipped: !!hand.skipped,
+    skipReason: hand.skip_reason,
+    playerName: player ? player.player_name : null,
+    position: player ? player.position : null,
+    handCategory: player ? player.hand_category : null,
+    heroCards: player ? player.hole_cards : null,
+    net: player ? player.net : null,
+    vpip: player ? !!player.vpip : null,
+    pfr: player ? !!player.pfr : null,
+    wentToShowdown: player ? !!player.went_to_showdown : null,
+    won: player ? !!player.won : null,
+    evAdjustmentBB: player ? player.ev_adjustment_bb : null,
+  };
+}
+
+module.exports = {
+  buildHandRecords, getConvertedText, importFileIntoStore, queryHands, getDistinctValues,
+  queryRawHandsForStats, getHandById, getHeroPlayerNames, getAllPlayerNames,
+  getTotalHandCount, backfillDeepStats,
+};

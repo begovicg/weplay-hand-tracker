@@ -1,0 +1,49 @@
+{
+  "name": "weplay-hand-tracker",
+  "version": "0.9.3",
+  "description": "A hand history manager for Weplay poker — import, browse, filter, and review your hands, plus convert them into CoinPoker format for Hand2Note / PokerTracker.",
+  "main": "main.js",
+  "private": true,
+  "author": "petit_blaireau",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/converter.test.js && node test/stats.test.js && node test/zipReader.test.js && node test/handStore.test.js && node test/handReplay.test.js && node test/handEvaluator.test.js && node test/equity.test.js && node test/evAnalysis.test.js && node test/chartMath.test.js",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.petitblaireau.weplayhandtracker",
+    "productName": "Weplay Hand Tracker",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "handDetailPreload.js",
+      "src/**/*",
+      "renderer/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Weplay Hand Tracker"
+    }
+  }
+}
