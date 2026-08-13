@@ -624,6 +624,25 @@ function aggregateStats(allHands) {
   const bbWon = sum(allHands, (h) => h.net / h.bb);
   const bb100 = n > 0 ? (bbWon / n) * 100 : null;
 
+  // EV Winrate (all-in equity adjusted bb/100) — the PokerTracker/Hold'em
+  // Manager convention: each hand's result is nudged by evAdjustmentBB (see
+  // src/evAnalysis.js), the difference in bb between what a genuine 2-player
+  // all-in-with-cards-to-come actually paid off and what it was "supposed to"
+  // pay off at the equity the money went in with (equity% * pot, converted
+  // to a bb delta). Hands with no such all-in moment carry evAdjustmentBB ==
+  // null and contribute their actual result unchanged, exactly like bb100.
+  // Deliberately shares allHands/n with bb100 above — an earlier version of
+  // this (in main.js) summed over the raw DB rows instead, which could
+  // silently include hands aggregateStats itself had excluded, making the
+  // two winrates not actually comparable to each other.
+  let evBbSum = 0, evAdjustedHandCount = 0;
+  for (const h of allHands) {
+    const adjustment = h.evAdjustmentBB || 0;
+    if (h.evAdjustmentBB != null) evAdjustedHandCount++;
+    evBbSum += h.net / h.bb + adjustment;
+  }
+  const evBb100 = n > 0 ? (evBbSum / n) * 100 : null;
+
   const vpipCount = nonBomb.filter((h) => h.vpip).length;
   const pfrCount = nonBomb.filter((h) => h.pfr).length;
 
@@ -848,15 +867,25 @@ function aggregateStats(allHands) {
     const dbb = `${b.date || ''} ${b.time || ''}`;
     return da < dbb ? -1 : da > dbb ? 1 : 0;
   });
-  let handCumulative = 0, handCumulativeShowdown = 0, handCumulativeNonShowdown = 0;
+  // A fourth parallel cumulative series — the EV-adjusted ("all-in equity
+  // adjusted") line: each hand's actual net, replaced with what it was
+  // worth at the equity the money went in with for the genuine all-in
+  // hands evAdjustmentBB covers (see the evBb100 comment above), and left
+  // as actual net for every other hand. h.net/h.bb + adjustment is the bb
+  // delta bb100/evBb100 already use — multiplying back by h.bb converts it
+  // to the same dollar units as `cumulative`, so this line overlays
+  // directly on the other three on the Advanced Graph.
+  let handCumulative = 0, handCumulativeShowdown = 0, handCumulativeNonShowdown = 0, handCumulativeEV = 0;
   const handTimeline = chronological.map((h, i) => {
     handCumulative += h.net;
     if (h.heroCardsShown) handCumulativeShowdown += h.net;
     else handCumulativeNonShowdown += h.net;
+    const evNet = (h.net / h.bb + (h.evAdjustmentBB || 0)) * h.bb;
+    handCumulativeEV += evNet;
     return {
       handNumber: i + 1, date: h.date, time: h.time, net: h.net,
       cumulative: handCumulative, cumulativeShowdown: handCumulativeShowdown,
-      cumulativeNonShowdown: handCumulativeNonShowdown,
+      cumulativeNonShowdown: handCumulativeNonShowdown, cumulativeEV: handCumulativeEV,
     };
   });
 
@@ -866,6 +895,8 @@ function aggregateStats(allHands) {
     nonBombPotHands: nonBomb.length,
     netResult: totalNet,
     bb100,
+    evBb100,
+    evAdjustedHandCount,
     vpip: pct(vpipCount, nonBomb.length),
     pfr: pct(pfrCount, nonBomb.length),
     rfi: pct(rfiCount, rfiOppCount),

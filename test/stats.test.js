@@ -1117,6 +1117,25 @@ test('aggregateStats basic math: net, BB/100, and win-at-showdown check out by h
   assert.strictEqual(stats.aggressionFactor, 1 / 1);
 });
 
+test('aggregateStats EV Winrate (evBb100): shares the bb100 denominator, and folds in evAdjustmentBB only where it\'s actually set', () => {
+  const hands = [
+    // No all-in EV moment (evAdjustmentBB left unset) — contributes its
+    // actual result unchanged, exactly like bb100 does.
+    { bb: 0.5, net: 5 },
+    // Lost the actual hand (-5bb) but ran a genuine all-in adjustment of
+    // +3bb (i.e. was "supposed to" only be down 2bb at the equity the
+    // money went in with).
+    { bb: 0.5, net: -2.5, evAdjustmentBB: 3 },
+    { bb: 0.5, net: -0.5 },
+  ];
+  const stats = aggregateStats(hands);
+  // bb: 10 + (-5+3) + (-1) = 7 over 3 hands -> 233.33 bb/100.
+  assert.ok(Math.abs(stats.evBb100 - (700 / 3)) < 0.001);
+  assert.strictEqual(stats.evAdjustedHandCount, 1, 'only the hand with a non-null evAdjustmentBB counts');
+  // bb100 itself must be unaffected by evAdjustmentBB being present.
+  assert.ok(Math.abs(stats.bb100 - (400 / 3)) < 0.001);
+});
+
 test('4-bet as raiser: hero opens, gets 3-bet, hero 4-bets — the same shape as the 3-bet stats, one level deeper', () => {
   const r = analyzeHand(HAND_4BET_AS_RAISER, 'Hero');
   assert.strictEqual(r.fourBet, true, 'hero re-raised while facing exactly two prior raises (the open + PlayerC\'s 3-bet)');
@@ -1466,7 +1485,9 @@ test('handTimeline: one entry per hand (not per date), sorted chronologically, w
   const hands = [
     // Deliberately out of chronological order, to confirm sorting happens.
     { ...base, date: '2026-01-02', time: '10:00:00', net: 5, heroCardsShown: false },
-    { ...base, date: '2026-01-01', time: '09:00:00', net: 10, heroCardsShown: true },
+    // Ran hot on a genuine all-in: actual +10bb, but only "supposed to" be
+    // +6bb at the equity the money went in with (evAdjustmentBB: -4).
+    { ...base, date: '2026-01-01', time: '09:00:00', net: 10, heroCardsShown: true, evAdjustmentBB: -4 },
     { ...base, date: '2026-01-01', time: '18:00:00', net: -3, heroCardsShown: false },
   ];
   const stats = aggregateStats(hands);
@@ -1480,6 +1501,12 @@ test('handTimeline: one entry per hand (not per date), sorted chronologically, w
   for (const h of stats.handTimeline) {
     assert.strictEqual(h.cumulativeShowdown + h.cumulativeNonShowdown, h.cumulative);
   }
+  // cumulativeEV: the first hand's EV result is 10 + (-4) = 6bb (i.e. $6 at
+  // bb=1), not its actual $10 — the other two hands have no adjustment, so
+  // they carry their actual net straight through.
+  assert.strictEqual(stats.handTimeline[0].cumulativeEV, 6);
+  assert.strictEqual(stats.handTimeline[1].cumulativeEV, 3);
+  assert.strictEqual(stats.handTimeline[2].cumulativeEV, 8);
 });
 
 test('aggregateStats: per-street aggression matches PokerTracker\'s documented AFq formula — (bets+raises) / (bets+raises+calls+folds), checks EXCLUDED — verified against a hand-computable example, not just plausibility', () => {

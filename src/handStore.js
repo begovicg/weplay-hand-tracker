@@ -13,7 +13,10 @@ const { buildHandReplay } = require('./handReplay');
 // hero) rather than re-deriving it, and stats.js for every player's deep
 // stats (net, VPIP, PFR, hand category, saw flop) — not hero-only anymore,
 // see the comment inside buildHandRecords for how that changed. EV
-// adjustment (src/evAnalysis.js) remains hero-only.
+// adjustment (src/evAnalysis.js) is hero-agnostic too — computed for
+// whichever two seated players a qualifying all-in was actually between,
+// each getting their own exact number — see the evAdjustmentBB comment
+// inside buildHandRecords.
 
 function buildHandRecords(rawBlock, sourceFile, options) {
   const heroOverride = (options && options.heroName) || null;
@@ -76,10 +79,17 @@ function buildHandRecords(rawBlock, sourceFile, options) {
     // 8-max table, extrapolating to about 15 extra seconds across this
     // project's entire 22,888-hand batch — not the "generalize the whole
     // engine" undertaking this module's own header comment once assumed
-    // it would be. EV adjustment stays hero-only for now — a separate,
-    // more involved generalization (src/evAnalysis.js), deliberately not
-    // bundled into this change.
+    // it would be.
     const playerStats = isHero ? statsResult : analyzeHand(rawBlock, p.name);
+    // EV adjustment: computeHandEVAdjustment is hero-agnostic (see its
+    // comment in evAnalysis.js) — evResult.players lists whichever two
+    // seated players the all-in was actually between, hero or not, each
+    // with their own exact adjustment. Every other seated player (someone
+    // who folded before the all-in ever happened, or wasn't part of it)
+    // correctly stays null, since the runout variance never applied to
+    // them.
+    const evMatch = evResult && evResult.players.find((pl) => pl.name === p.name);
+    const evAdjustmentBB = evMatch ? evMatch.adjustmentBB : null;
     return {
       handId: replay.handId,
       playerName: p.name,
@@ -97,7 +107,7 @@ function buildHandRecords(rawBlock, sourceFile, options) {
       // off the hand's own showdown/winners data.
       wentToShowdown: showdownByName.has(p.name) ? 1 : 0,
       won: wonNames.has(p.name) ? 1 : 0,
-      evAdjustmentBB: isHero && evResult ? evResult.adjustmentBB : null,
+      evAdjustmentBB,
     };
   });
 
@@ -116,39 +126,113 @@ function getConvertedText(rawText, options) {
 
 // ── Import ───────────────────────────────────────────────────────────────
 
+// A genuine UPDATE on conflict, deliberately NOT "INSERT OR REPLACE" — that
+// statement's name is misleading: SQLite's REPLACE conflict resolution
+// deletes the existing row and inserts a fresh one, which is indistinguishable
+// from an UPDATE for this table's own columns, but hand_players.hand_id
+// REFERENCES hands(hand_id) ON DELETE CASCADE (see src/db.js) — so that
+// delete silently cascaded and wiped every hand_players row for the hand
+// BEFORE UPSERT_PLAYER_SQL's own merge logic ever ran, discarding the exact
+// data (an earlier importer's hole cards, is_hero) that merge exists to
+// protect. An ON CONFLICT...DO UPDATE never deletes the row at all, so no
+// cascade fires.
 const UPSERT_HAND_SQL = `
-  INSERT OR REPLACE INTO hands
+  INSERT INTO hands
     (hand_id, source_file, imported_at, date, time, sb_stake, bb_stake, stakes_label,
      max_seats, table_type, table_category, is_run_twice, board, pot_size, rake,
      skipped, skip_reason, raw_text)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(hand_id) DO UPDATE SET
+    source_file = excluded.source_file,
+    imported_at = excluded.imported_at,
+    date = excluded.date,
+    time = excluded.time,
+    sb_stake = excluded.sb_stake,
+    bb_stake = excluded.bb_stake,
+    stakes_label = excluded.stakes_label,
+    max_seats = excluded.max_seats,
+    table_type = excluded.table_type,
+    table_category = excluded.table_category,
+    is_run_twice = excluded.is_run_twice,
+    board = excluded.board,
+    pot_size = excluded.pot_size,
+    rake = excluded.rake,
+    skipped = excluded.skipped,
+    skip_reason = excluded.skip_reason,
+    raw_text = excluded.raw_text
 `;
 
-const DELETE_PLAYERS_SQL = 'DELETE FROM hand_players WHERE hand_id = ?';
-
-const INSERT_PLAYER_SQL = `
+// One player at a time, upserted rather than delete-then-reinsert — this is
+// what makes it safe to import the SAME hand_id from two different people's
+// own exports of a hand they shared a table for (the actual scenario a
+// shared/pooled multi-person database needs). Each real Weplay hand only
+// ever reveals hole cards from two angles: whoever's own client the file
+// came from (their hidden cards, even if mucked) and anyone who showed at a
+// genuine showdown (public — identical in every witness's export). A naive
+// delete-then-reinsert on re-import loses the FIRST angle: importing
+// Friend B's file after Friend A's already-stored file would null out A's
+// hole cards (B's export never saw them) and flip is_hero from A to B, even
+// though nothing about the real hand changed. ON CONFLICT here merges
+// instead of replacing:
+//   - is_hero: MAX (OR) — once ANY import reveals this hand from a given
+//     player's own client, they stay flagged as a real hero of this hand
+//     forever, even if a later import is from someone else's file.
+//   - hole_cards: COALESCE(new, old) — never let a "this file doesn't know"
+//     import null out an already-known answer; still updates the instant
+//     any import DOES know it (their own file, or a showdown reveal).
+//   - net/vpip/pfr/saw_flop/hand_category/went_to_showdown/won/seat/
+//     position/starting_stack: COALESCE(new, old) too, but these are all
+//     derived from PUBLIC action/board state that's identical regardless of
+//     which witness's file it came from, so which side "wins" is a
+//     tiebreak, not a correctness question — refreshing to the newest
+//     computation is just a nice side effect (e.g. an analyzeHand bug fix
+//     naturally reaches already-imported hands on their next re-import).
+//   - ev_adjustment_bb: COALESCE(old, new) — the ONE column deliberately
+//     preferring the EXISTING value, so a harmless re-import of an
+//     already-resolved all-in doesn't churn its stored number on every
+//     re-import via a fresh (differently-seeded) Monte Carlo draw.
+const UPSERT_PLAYER_SQL = `
   INSERT INTO hand_players
     (hand_id, player_name, is_hero, seat, position, starting_stack, hole_cards,
      net, vpip, pfr, saw_flop, hand_category, went_to_showdown, won, ev_adjustment_bb)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(hand_id, player_name) DO UPDATE SET
+    is_hero          = MAX(hand_players.is_hero, excluded.is_hero),
+    seat             = COALESCE(excluded.seat, hand_players.seat),
+    position         = COALESCE(excluded.position, hand_players.position),
+    starting_stack   = COALESCE(excluded.starting_stack, hand_players.starting_stack),
+    hole_cards       = COALESCE(excluded.hole_cards, hand_players.hole_cards),
+    net              = COALESCE(excluded.net, hand_players.net),
+    vpip             = COALESCE(excluded.vpip, hand_players.vpip),
+    pfr              = COALESCE(excluded.pfr, hand_players.pfr),
+    saw_flop         = COALESCE(excluded.saw_flop, hand_players.saw_flop),
+    hand_category    = COALESCE(excluded.hand_category, hand_players.hand_category),
+    went_to_showdown = COALESCE(excluded.went_to_showdown, hand_players.went_to_showdown),
+    won              = COALESCE(excluded.won, hand_players.won),
+    ev_adjustment_bb = COALESCE(hand_players.ev_adjustment_bb, excluded.ev_adjustment_bb)
 `;
 
 /**
  * Imports every hand from a raw Weplay file into the database, keyed by
- * hand ID so re-importing the same file (or an overlapping export) safely
- * updates rather than duplicates — each hand's player rows are fully
- * replaced (not merged) on re-import, so a hand's data never mixes stale
- * and fresh rows. Wrapped in one transaction per file: importing thousands
- * of hands as individually-committed statements measurably slower and adds
- * no correctness benefit here.
+ * hand ID so re-importing the same file (or an overlapping export from a
+ * different person who shared that table) safely updates rather than
+ * duplicates. Player rows are MERGED, not replaced, on re-import — see the
+ * comment on UPSERT_PLAYER_SQL above for exactly what that means and why a
+ * blind replace was a real data-loss bug for the multi-importer case.
+ * Hand-level fields (board, pot, rake, etc.) are still last-import-wins via
+ * plain INSERT OR REPLACE: unlike hole cards, those are public facts about
+ * the hand that are identical regardless of whose file revealed them, so
+ * there's nothing to merge — whichever import ran most recently is just as
+ * correct as any other. Wrapped in one transaction per file: importing
+ * thousands of hands as individually-committed statements measurably
+ * slower and adds no correctness benefit here.
  */
 function importFileIntoStore(db, rawText, sourceFile, options, splitHandsFn) {
   const blocks = splitHandsFn(rawText);
   let added = 0, updated = 0, skippedCount = 0;
 
   const upsertHand = db.prepare(UPSERT_HAND_SQL);
-  const deletePlayers = db.prepare(DELETE_PLAYERS_SQL);
-  const insertPlayer = db.prepare(INSERT_PLAYER_SQL);
+  const upsertPlayer = db.prepare(UPSERT_PLAYER_SQL);
   const checkExists = db.prepare('SELECT 1 FROM hands WHERE hand_id = ?');
 
   db.exec('BEGIN');
@@ -166,9 +250,8 @@ function importFileIntoStore(db, rawText, sourceFile, options, splitHandsFn) {
         h.stakesLabel, h.maxSeats, h.tableType, h.tableCategory, h.isRunTwice, h.board,
         h.potSize, h.rake, h.skipped, h.skipReason, h.rawText,
       );
-      deletePlayers.run(h.handId);
       for (const p of players) {
-        insertPlayer.run(
+        upsertPlayer.run(
           p.handId, p.playerName, p.isHero, p.seat, p.position, p.startingStack,
           p.holeCards, p.net, p.vpip, p.pfr, p.sawFlop, p.handCategory, p.wentToShowdown, p.won,
           p.evAdjustmentBB,
@@ -409,6 +492,73 @@ function backfillDeepStats(db, analyzeHandFn) {
   return rows.length;
 }
 
+/**
+ * One-time backfill for two real gaps in EV adjustment (src/evAnalysis.js),
+ * not a missing-column gap like backfillDeepStats above — both were bugs in
+ * what got computed at import time, for hands imported before each was
+ * fixed:
+ *   1. Villain-side mirroring never existed at all (an earlier version only
+ *      ever stored hero's side of a qualifying all-in, leaving the actual
+ *      opponent's row NULL even though their number is the exact negation).
+ *   2. Even after mirroring was added, findAllInSpot was hero-anchored — an
+ *      all-in between two players where NEITHER was hero (hero folded
+ *      earlier, or wasn't dealt into that pot at all) was silently skipped
+ *      entirely, leaving BOTH seated players in that hand NULL. This was
+ *      the larger of the two: it meant a non-hero player's EV winrate barely
+ *      differed from their actual winrate, since only their all-ins against
+ *      hero specifically were ever being adjusted.
+ *
+ * A single pass covers both: for every hand that mentions an all-in in its
+ * raw text and does NOT have exactly two player rows with a real
+ * evAdjustmentBB yet — the reliable signal that this hand hasn't been fully
+ * resolved under the current logic, since a genuinely qualifying all-in
+ * always produces exactly two non-null rows: zero means gap #2 (or a hand
+ * that never actually qualifies), one means gap #1 (the old hero-only
+ * mirroring) — re-runs computeHandEVAdjustment fresh from the stored
+ * raw_text (no re-import needed) and writes both participants' numbers
+ * directly (computeHandEVAdjustment already returns the exact negation for
+ * both sides — nothing to re-derive here).
+ *
+ * Not fully idempotent the way backfillDeepStats is: a hand that mentions
+ * "and is all-in" but never actually qualifies (3+-way, run-it-twice, an
+ * all-in closing exactly on the river) will keep matching the SELECT below
+ * on every call, since it can never reach exactly two non-null rows to make
+ * the scan go quiet. That's bounded to the same cheap subset
+ * computeHandEVAdjustment already limits itself to (~12% of a real batch)
+ * and never repeats any Monte Carlo work for hands that don't qualify
+ * (findAllInSpot returns null before equity() is ever called) — a fast scan
+ * on every subsequent startup, not a slow one.
+ */
+function backfillEVAdjustments(db) {
+  const rows = db.prepare(`
+    SELECT h.hand_id AS handId, h.raw_text AS rawText
+    FROM hands h
+    WHERE h.raw_text LIKE '%and is all-in%'
+      AND (SELECT COUNT(*) FROM hand_players hp WHERE hp.hand_id = h.hand_id AND hp.ev_adjustment_bb IS NOT NULL) != 2
+  `).all();
+  if (rows.length === 0) return 0;
+
+  const update = db.prepare(`
+    UPDATE hand_players SET ev_adjustment_bb = ?
+    WHERE hand_id = ? AND player_name = ?
+  `);
+  let fixed = 0;
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      const evResult = computeHandEVAdjustment(r.rawText);
+      if (!evResult) continue; // mentions "all-in" but doesn't actually qualify — see the comment above
+      for (const pl of evResult.players) update.run(pl.adjustmentBB, r.handId, pl.name);
+      fixed++;
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return fixed;
+}
+
 function getDistinctValues(db, filters) {
   const f = filters || {};
   const { where, params } = buildWhereClause({ perspectivePlayer: f.perspectivePlayer });
@@ -486,5 +636,5 @@ function getHandById(db, handId, perspectivePlayer) {
 module.exports = {
   buildHandRecords, getConvertedText, importFileIntoStore, queryHands, getDistinctValues,
   queryRawHandsForStats, getHandById, getHeroPlayerNames, getAllPlayerNames,
-  getTotalHandCount, backfillDeepStats,
+  getTotalHandCount, backfillDeepStats, backfillEVAdjustments,
 };

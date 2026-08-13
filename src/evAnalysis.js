@@ -15,6 +15,18 @@ const { equity } = require('./equity');
  * the river (no cards left to come, so no run-out variance to adjust for
  * even though it was technically an all-in).
  *
+ * Deliberately NOT anchored to hero: replay.showdown already lists whoever
+ * actually showed their hand, for any seated player, regardless of who this
+ * particular import's "hero" was — an all-in between two other players
+ * (hero folded earlier, or wasn't even dealt into the pot) qualifies exactly
+ * the same way an all-in involving hero does. An earlier version of this
+ * function required one of the two showdown entries to be isHero, which
+ * meant every all-in NOT involving hero was silently skipped — the entire
+ * hand kept its actual result for BOTH players, even though both hands were
+ * fully known and the same equity math applied. That's why, before this
+ * fix, a non-hero player's EV winrate barely differed from their actual
+ * winrate: only their all-ins against hero specifically were ever adjusted.
+ *
  * Scope: two players only. A 3+-way all-in needs per-opponent side-pot
  * equity math (each player's equity depends on exactly who they're
  * contesting which pot with) that this doesn't attempt yet — such hands
@@ -23,9 +35,7 @@ const { equity } = require('./equity');
 function findAllInSpot(replay) {
   if (!replay || replay.isRunTwice) return null;
   if (replay.showdown.length !== 2) return null;
-  const heroEntry = replay.showdown.find((s) => s.isHero);
-  const villainEntry = replay.showdown.find((s) => !s.isHero);
-  if (!heroEntry || !villainEntry) return null;
+  const [entryA, entryB] = replay.showdown;
 
   const streetOrder = ['flop', 'turn', 'river'];
   const streetsPresent = streetOrder.filter((s) => replay.streets[s]);
@@ -43,21 +53,27 @@ function findAllInSpot(replay) {
   if (5 - knownBoard.length === 0) return null; // betting closed exactly on the river — no runout variance
 
   return {
-    heroCards: heroEntry.cards.split(/\s+/),
-    villainCards: villainEntry.cards.split(/\s+/),
+    aName: entryA.name,
+    aCards: entryA.cards.split(/\s+/),
+    bName: entryB.name,
+    bCards: entryB.cards.split(/\s+/),
     knownBoard,
-    heroName: heroEntry.name,
-    villainName: villainEntry.name,
   };
 }
 
 /**
  * Computes the EV adjustment (in big blinds) for one hand, if it qualifies.
  * Returns null if this hand isn't an EV-adjustable spot at all (most hands
- * — anything short of a genuine 2-player all-in-with-cards-to-come). When it
- * does apply, `adjustmentBB` is how many BB to add to the hand's actual
- * result to get its EV result — positive means hero ran worse than their
- * equity, negative means better.
+ * — anything short of a genuine 2-player all-in-with-cards-to-come).
+ * Symmetric and hero-agnostic (see findAllInSpot above for why): the
+ * `players` array always has exactly the two participants of that all-in,
+ * whoever they are, each with their own adjustmentBB — how many BB to add
+ * to THEIR actual result to get THEIR EV result. Positive means that player
+ * ran worse than their equity, negative means better. The two are always
+ * exact negations of each other — not an approximation, since the pot at
+ * the all-in point is fully claimed between exactly these two players
+ * (equityA + equityB == 1 by construction, see equity.js), so
+ * aEVBB + bEVBB == potBB == aActualBB + bActualBB.
  */
 function computeHandEVAdjustment(rawBlock, heroNameOverride, options) {
   // Cheap pre-filter before the expensive full parse: every all-in action is
@@ -75,17 +91,21 @@ function computeHandEVAdjustment(rawBlock, heroNameOverride, options) {
   const bb = bbMatch ? parseFloat(bbMatch[1]) : null;
   if (!bb) return null;
 
-  const eq = equity(spot.heroCards, spot.villainCards, spot.knownBoard, options);
+  const eq = equity(spot.aCards, spot.bCards, spot.knownBoard, options);
   const potBB = replay.winners.reduce((s, w) => s + w.amountBB, 0);
-  const heroActualBB = (replay.winners.find((w) => w.name === spot.heroName) || { amountBB: 0 }).amountBB;
-  const heroEVBB = eq.equityA * potBB;
+  const aActualBB = (replay.winners.find((w) => w.name === spot.aName) || { amountBB: 0 }).amountBB;
+  const bActualBB = (replay.winners.find((w) => w.name === spot.bName) || { amountBB: 0 }).amountBB;
+  const aEVBB = eq.equityA * potBB;
+  const bEVBB = potBB - aEVBB;
 
   return {
     handId: replay.handId,
-    adjustmentBB: heroEVBB - heroActualBB,
-    equity: eq.equityA,
-    exact: eq.exact,
     potBB,
+    exact: eq.exact,
+    players: [
+      { name: spot.aName, equity: eq.equityA, adjustmentBB: aEVBB - aActualBB },
+      { name: spot.bName, equity: 1 - eq.equityA, adjustmentBB: bEVBB - bActualBB },
+    ],
   };
 }
 

@@ -6,6 +6,17 @@
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- Present in the static markup, not toggled on by JS — this is the very
+       first thing painted (before any script runs, before the DB has been
+       queried), replacing what used to be a bare, unstyled flash of the page
+       shell while the initial hands/stats fetch was still in flight. Hidden
+       once loadHandsAndStats() finishes its first run (see renderer.js). -->
+  <div id="bootOverlay" class="boot-overlay">
+    <span class="logo-mark boot-overlay-logo">W</span>
+    <div class="spinner"></div>
+    <p class="loading-text">Loading your hands…</p>
+  </div>
+
   <header class="app-header">
     <div class="logo">
       <span class="logo-mark">W</span>
@@ -261,6 +272,7 @@
           <span id="legendTotal" class="graph-legend-item"><span class="graph-legend-swatch swatch-total"></span>Total Profit</span>
           <span id="legendShowdown" class="graph-legend-item"><span class="graph-legend-swatch swatch-showdown"></span>Went to Showdown</span>
           <span id="legendNonShowdown" class="graph-legend-item"><span class="graph-legend-swatch swatch-nonshowdown"></span>No Showdown</span>
+          <span id="legendEV" class="graph-legend-item"><span class="graph-legend-swatch swatch-ev"></span>EV Adjusted</span>
         </div>
         <div id="advancedGraphChart" class="advanced-graph-chart"></div>
       </section>

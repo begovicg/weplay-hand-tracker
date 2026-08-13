@@ -9,6 +9,17 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// "$0.25/$0.50" -> "NL50" — same formula (and the same duplicated-not-shared
+// pattern, this window's script has no access to renderer.js's own copy) as
+// renderer.js's formatStakesLimit: the poker-community limit name, always
+// derived from the big blind (NL = 100 * bb in $), never hardcoded per stake.
+function formatStakesLimit(stakesLabel) {
+  if (!stakesLabel) return stakesLabel;
+  const m = /\$([0-9.]+)$/.exec(stakesLabel);
+  if (!m) return stakesLabel;
+  return `NL${Math.round(parseFloat(m[1]) * 100)}`;
+}
+
 // ── PokerTracker-style formatted view ──────────────────────────────────
 
 const SUIT_CLASS = { s: 'suit-s', h: 'suit-h', d: 'suit-d', c: 'suit-c' };
@@ -40,7 +51,7 @@ function renderFormatted(replay) {
 
   const parts = [];
   const tableLabel = replay.tableType === 'bombpot' ? ' (Bomb Pot)' : '';
-  parts.push(`<div class="hf-title">Weplay - ${escapeHtml(replay.stakesLabel)} NL (${replay.maxSeats}-max) - Hold'em${tableLabel}</div>`);
+  parts.push(`<div class="hf-title">Weplay - ${escapeHtml(formatStakesLimit(replay.stakesLabel))} (${replay.maxSeats}-max) - Hold'em${tableLabel}</div>`);
 
   parts.push('<div class="hf-players">');
   for (const p of replay.players) {

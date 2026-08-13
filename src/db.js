@@ -12,15 +12,20 @@ const path = require('path');
 // file), and to query by ANY player's name later — "which hands did X play"
 // is the same shape of query as "which hands did I play", not a special case.
 //
-// Deep stats (VPIP, PFR, hand category, EV adjustment) are only populated
-// for whichever player is_hero=1 for that specific hand — generalizing that
-// to every seated player needs stats.js's analysis engine to track all
-// players at once, not just hero, which is real future work, not a small
-// addition on top of this schema. What IS populated for every player here:
-// seat, position, starting stack, hole cards (when known — hero's own, or
-// anyone who showed at a real showdown), and whether they won / reached
-// showdown (both cheaply readable off the hand's own showdown/winners data
-// regardless of whose perspective is being viewed).
+// Deep stats (VPIP, PFR, hand category, EV adjustment) are populated for
+// EVERY seated player, not just is_hero=1 — see src/handStore.js's
+// buildHandRecords. is_hero itself just marks "this player's own client
+// exported this hand at least once" (can be true for more than one player
+// on the same hand, once a shared/pooled database has hands imported from
+// multiple people who sat at the same table — see UPSERT_PLAYER_SQL in
+// handStore.js for how re-importing the same hand from a second person's
+// file merges rather than clobbers the first person's data), used as the
+// default perspective when a query doesn't name a specific player. What's
+// populated for every player regardless of is_hero: seat, position,
+// starting stack, hole cards (when known — that player's own via their own
+// export, or anyone who showed at a real showdown), and whether they won /
+// reached showdown (both cheaply readable off the hand's own
+// showdown/winners data regardless of whose perspective is being viewed).
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS hands (
@@ -84,6 +89,12 @@ function openDatabase(filePath) {
   // seconds for a batch with several all-in hands needing EV computation.
   db.exec('PRAGMA journal_mode = WAL');
   db.exec('PRAGMA foreign_keys = ON');
+  // Two connections to this same file are expected now: the main process's
+  // own, and the background backfill worker's (see src/backfillWorker.js) —
+  // WAL mode already lets them coexist (one writer, readers unblocked), but
+  // if both happen to write in the same instant one gets SQLITE_BUSY. A
+  // busy timeout makes that a brief retry instead of a thrown error.
+  db.exec('PRAGMA busy_timeout = 5000');
   db.exec(SCHEMA);
   // CREATE TABLE IF NOT EXISTS only helps brand-new databases — an already-
   // existing database file on someone's disk keeps whatever columns it had

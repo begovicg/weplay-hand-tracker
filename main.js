@@ -2,6 +2,7 @@
 
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const { DatabaseSync } = require('node:sqlite');
+const { Worker } = require('node:worker_threads');
 const path = require('path');
 const fs = require('fs');
 const { convertFile } = require('./src/converter');
@@ -11,7 +12,7 @@ const { openDatabase } = require('./src/db');
 const {
   importFileIntoStore, queryHands, getDistinctValues, getHandById, getConvertedText,
   queryRawHandsForStats, getAllPlayerNames,
-  getTotalHandCount, backfillDeepStats,
+  getTotalHandCount,
 } = require('./src/handStore');
 const { migrateJsonStoreIfPresent } = require('./src/migrateJsonStore');
 const { buildHandReplay } = require('./src/handReplay');
@@ -38,6 +39,47 @@ const handWindows = new Map(); // "handId::perspectivePlayer" -> BrowserWindow, 
 const dbPath = path.join(app.getPath('userData'), 'hands.db');
 const oldJsonStorePath = path.join(app.getPath('userData'), 'hands.json');
 let db = null;
+let backfillWorker = null;
+
+// The one-time backfills (backfillDeepStats, backfillEVAdjustments — see
+// src/handStore.js) used to run synchronously right here, inline. That was
+// fine while they were cheap, but once EV adjustment was generalized to
+// cover every all-in in the database (not just hero's own), a real
+// multi-thousand-hand database can have hundreds of qualifying hands, each
+// needing its own equity computation (up to ~1 second for a Monte Carlo
+// preflop/flop all-in) — tens of minutes of synchronous main-thread work in
+// the worst case. Electron's main thread also owns the native window
+// message pump on Windows, so that much unbroken synchronous work made the
+// app appear as "Not Responding" at the OS level, not just slow — a real
+// regression reported after that change. Running it on a worker thread
+// instead (src/backfillWorker.js, its own separate SQLite connection to the
+// same file) means the main thread — and the window it owns — is never
+// blocked by it, however long it takes; see src/db.js's busy_timeout
+// comment for why two connections writing to the same file is safe.
+function startBackfillWorker() {
+  backfillWorker = new Worker(path.join(__dirname, 'src', 'backfillWorker.js'), { workerData: { dbPath } });
+  // Don't let a still-running background backfill keep the app process
+  // alive after every window is closed and app.quit() is called — this is
+  // maintenance work, not something worth delaying shutdown for.
+  backfillWorker.unref();
+  backfillWorker.on('message', (msg) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backfill-status', msg);
+    if (msg.phase === 'done') {
+      if (msg.deepStatsFixed > 0) console.log(`Backfilled deep stats for ${msg.deepStatsFixed} player-hand row(s) from before this was computed for every seated player.`);
+      if (msg.evFixed > 0) console.log(`Backfilled EV adjustment for ${msg.evFixed} hand(s) imported before it covered both hero-involving and non-hero all-ins.`);
+    } else if (msg.phase === 'error') {
+      console.error('Background database backfill failed:', msg.error);
+    }
+  });
+  backfillWorker.on('error', (err) => console.error('Backfill worker crashed:', err));
+}
+
+function stopBackfillWorker() {
+  if (backfillWorker) {
+    backfillWorker.terminate();
+    backfillWorker = null;
+  }
+}
 
 function getDb() {
   if (db === null) {
@@ -46,24 +88,13 @@ function getDb() {
     if (migration.migrated) {
       console.log(`Migrated ${migration.totalRecords} hands from the old JSON store (${migration.added} added, ${migration.updated} updated, ${migration.skipped} skipped).`);
     }
-    // One-time backfill covering two real gaps: hands imported before
-    // saw_flop existed (hero rows, net already populated but saw_flop
-    // still NULL), and — since deep stats now compute for every seated
-    // player, not just hero — every non-hero row from before that change,
-    // which never had net/VPIP/PFR/etc computed at all. Idempotent: once
-    // every row has a real value, this finds nothing left to do and is a
-    // fast no-op on every subsequent launch. Verified against this
-    // project's real 22,888-hand batch (140,253 total player-rows across
-    // every seated player) at under 10 seconds worst-case.
-    const backfilled = backfillDeepStats(db, analyzeHand);
-    if (backfilled > 0) {
-      console.log(`Backfilled deep stats for ${backfilled} player-hand row(s) from before this was computed for every seated player.`);
-    }
+    startBackfillWorker();
   }
   return db;
 }
 
 function closeDb() {
+  stopBackfillWorker();
   if (db) {
     try { db.close(); } catch (err) { /* already closed or unusable, nothing to do */ }
     db = null;
@@ -157,7 +188,10 @@ function createWindow() {
     height: 760,
     minWidth: 720,
     minHeight: 560,
-    backgroundColor: '#0e0e0f',
+    // Matches renderer/style.css's --bg exactly — any mismatch here shows up
+    // as a brief flash the instant the stylesheet finishes applying over
+    // this native pre-paint color.
+    backgroundColor: '#0b0b0c',
     title: 'Weplay Hand Tracker',
     icon: path.join(__dirname, 'build', 'icon.png'),
     // Not shown until maximized and ready — avoids a visible flash of a
@@ -279,31 +313,28 @@ ipcMain.handle('get-persistent-stats', async (event, filters) => {
   let excludedCount = 0;
   for (const row of rows) {
     const result = analyzeHand(row.rawText, row.playerName);
-    if (result) allHands.push(result); else excludedCount++;
+    if (result) {
+      // Carry the DB-stored all-in EV adjustment (see src/evAnalysis.js /
+      // src/handStore.js) onto the freshly re-parsed hand object, so
+      // aggregateStats can fold it into both the EV winrate and the
+      // per-hand EV cumulative line without a second query or a re-run of
+      // the Monte Carlo equity sampling.
+      result.evAdjustmentBB = row.evAdjustmentBB;
+      allHands.push(result);
+    } else excludedCount++;
   }
-  const stats = aggregateStats(allHands);
-
-  // EV winrate: reads each hand's EV adjustment straight from the database
+  // EV winrate (evBb100) and handTimeline's EV cumulative line both live in
+  // aggregateStats now, computed from the same allHands set bb100 uses —
+  // each hand's EV adjustment was read straight from the database above
   // (computed once at import time — see src/handStore.js and
-  // src/evAnalysis.js), rather than recomputing it here. Recomputing would
-  // mean re-running Monte Carlo equity sampling for every qualifying hand on
+  // src/evAnalysis.js), rather than recomputed here. Recomputing would mean
+  // re-running Monte Carlo equity sampling for every qualifying hand on
   // every single Stats tab visit, which measured at over 30 seconds for a
   // real 22,889-hand database — fine as a one-time import cost, not
   // acceptable to repeat every time someone just wants to check their stats.
-  let evBbSum = 0, evHandCount = 0, evAdjustedHandCount = 0;
-  for (const row of rows) {
-    if (row.net == null || !row.stakesLabel) continue;
-    const bbMatch = /\/\$([0-9.]+)$/.exec(row.stakesLabel);
-    const bb = bbMatch ? parseFloat(bbMatch[1]) : null;
-    if (!bb) continue;
-    const adjustment = row.evAdjustmentBB || 0;
-    if (row.evAdjustmentBB != null) evAdjustedHandCount++;
-    evBbSum += row.net / bb + adjustment;
-    evHandCount++;
-  }
-  const evBb100 = evHandCount > 0 ? (evBbSum / evHandCount) * 100 : null;
+  const stats = aggregateStats(allHands);
 
-  return { stats, excludedCount, totalStoredHands: rows.length, evBb100, evAdjustedHandCount };
+  return { stats, excludedCount, totalStoredHands: rows.length, evBb100: stats.evBb100, evAdjustedHandCount: stats.evAdjustedHandCount };
 });
 
 // ── IPC: save results (single file, or zip if multiple) ────────────────
@@ -435,7 +466,9 @@ ipcMain.handle('open-hand-window', async (event, handId, perspectivePlayer) => {
     height: 620,
     minWidth: 480,
     minHeight: 420,
-    backgroundColor: '#0e0e0f',
+    // Matches renderer/style.css's --bg (this window loads style.css too,
+    // layered under hand-detail.css) — see createWindow()'s comment above.
+    backgroundColor: '#0b0b0c',
     title: `Hand #${handId}`,
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {

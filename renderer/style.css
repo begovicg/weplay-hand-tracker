@@ -22,6 +22,10 @@
      for the Advanced Graph's showdown-results line, so the app doesn't
      introduce an uncoordinated second blue. */
   --info: #3b82f6;
+  /* The Advanced Graph's EV-adjusted (all-in equity) line — kept distinct
+     from --warn's orange so the two aren't mistaken for each other when
+     both appear near the stat cards. */
+  --ev-line: #facc15;
   --radius: 12px;
   --radius-sm: 8px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -120,7 +124,7 @@ body {
 main {
   max-width: 1500px;
   margin: 0 auto;
-  padding: 30px 24px 110px; /* room for the fixed footer so it never overlaps content */
+  padding: 14px 24px 110px; /* room for the fixed footer so it never overlaps content */
 }
 
 .dropzone {
@@ -219,7 +223,7 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: 32px 0 10px;
+  margin: 16px 0 10px;
 }
 
 .section-head h2, #resultsSection h2 {
@@ -517,30 +521,48 @@ main {
   background: var(--bg-panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
-  padding: 18px 20px;
+  padding: 32px 36px;
 }
 
 .advanced-graph-chart {
   width: 100%;
-  height: 40vh;
-  min-height: 320px;
+  height: 56vh;
+  min-height: 420px;
+}
+
+/* These boxes' own generous padding (above) IS the deliberate margin — a
+   .section-head inside them would otherwise stack its own 16px top margin
+   on top of that, pushing the actual table/chart down further than
+   intended. */
+.hud-section .section-head,
+.advanced-graph-section .section-head {
+  margin-top: 0;
 }
 
 /* Advanced Stats tab — HUD table: a Dojson-HUD-style grouped breakdown of
-   every stat stats.js computes. See renderer.js's renderHudTable. */
+   every stat stats.js computes. See renderer.js's renderHudTable. Exactly
+   4 groups now (Steal and Check-Raise share one column) — a fixed 4-column
+   grid instead of the previous auto-fit, so the count stays a deliberate 4
+   across instead of however many 230px tiles happen to fit. Collapses to 2
+   under 900px (the same breakpoint .stats-overview-grid already uses) so 4
+   real columns don't get squeezed illegibly narrow on a smaller window. */
 .hud-section {
   background: var(--bg-panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
-  padding: 16px 18px;
+  padding: 32px 36px;
   margin-bottom: 20px;
 }
 
 .hud-table {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
   align-items: start;
+}
+
+@media (max-width: 900px) {
+  .hud-table { grid-template-columns: repeat(2, 1fr); }
 }
 
 .hud-group {
@@ -628,6 +650,7 @@ main {
 .swatch-total { background: var(--ok); }
 .swatch-showdown { background: var(--info); }
 .swatch-nonshowdown { background: var(--danger); }
+.swatch-ev { background: var(--ev-line); }
 
 .stats-overview-head {
   display: flex;
@@ -658,10 +681,14 @@ main {
   .stats-overview-grid { grid-template-columns: 1fr; }
 }
 
+/* A real 3x3 grid, not auto-fill — exactly 9 cards (see renderStats),
+   arranged the same row-major order as the Dojson HUD reference this is
+   deliberately modeled on: Hands/Winnings/VPIP, Home/Winrate/PFR,
+   WWSF/Expected V/3Bet. */
 .stats-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
   align-content: start;
 }
 
@@ -669,28 +696,36 @@ main {
   background: var(--bg-panel-2);
   border: 1px solid var(--border-soft);
   border-radius: 9px;
-  padding: 9px 10px;
+  padding: 14px 18px;
   transition: border-color 0.2s var(--ease), transform 0.15s var(--ease);
 }
 
 .stat-card:hover { border-color: var(--border); transform: translateY(-1px); }
 
+/* Label left, value right on one line — the Dojson HUD's own layout,
+   instead of the previous stacked label-above-value tile. */
+.stat-card-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .stat-card-label {
-  font-size: 9.5px;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 4px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .stat-card-value {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 800;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .stat-card-value.positive { color: var(--ok); }
@@ -699,7 +734,7 @@ main {
 .stat-card-sub {
   font-size: 9px;
   color: var(--text-faint);
-  margin-top: 3px;
+  margin-top: 5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -732,13 +767,17 @@ main {
 /* Hands table lives inside the same stats-overview panel now, as its own
    labeled sub-section rather than a separate card. */
 #handsSection {
-  margin-top: 18px;
-  padding-top: 16px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--border-soft);
 }
 
+/* Overrides ALL of .section-head's margin here, not just bottom — the
+   border-top/margin-top on #handsSection itself already separates this
+   from the stat cards above, so the general rule's own 16px top margin
+   would just be redundant extra space stacked on top of that. */
 #handsSection .section-head {
-  margin-bottom: 10px;
+  margin: 0 0 10px;
 }
 
 .hands-pagination {
@@ -864,6 +903,34 @@ main {
 
 .loading-overlay.hidden {
   display: none;
+}
+
+/* Boot overlay — a solid (not translucent) full-bleed cover, distinct from
+   the semi-transparent .loading-overlay above: that one veils real content
+   that's already on screen during a later operation (import, export...);
+   this one stands in for content that doesn't exist yet at all, so it needs
+   to be fully opaque, not a blur over an empty page. */
+.boot-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  z-index: 100;
+}
+
+.boot-overlay.hidden {
+  display: none;
+}
+
+.boot-overlay-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  font-size: 30px;
 }
 
 .spinner {

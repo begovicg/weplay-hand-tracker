@@ -18,4 +18,10 @@ contextBridge.exposeInMainWorld('weplayConverter', {
   getFilterOptions: (filters) => ipcRenderer.invoke('get-filter-options', filters),
   getAllPlayers: () => ipcRenderer.invoke('get-all-players'),
   openHandWindow: (handId, perspectivePlayer) => ipcRenderer.invoke('open-hand-window', handId, perspectivePlayer),
+  // One-way push from main, not invoke/handle — the background backfill
+  // worker (see main.js/src/backfillWorker.js) reports its own progress on
+  // its own schedule, not in response to a renderer request. callback
+  // receives { phase: 'start' } once, then eventually either
+  // { phase: 'done', deepStatsFixed, evFixed } or { phase: 'error', error }.
+  onBackfillStatus: (callback) => ipcRenderer.on('backfill-status', (event, payload) => callback(payload)),
 });

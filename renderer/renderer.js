@@ -31,6 +31,7 @@ const statsChart = document.getElementById('statsChart');
 const statsCaveat = document.getElementById('statsCaveat');
 const loadingOverlay = document.getElementById('loadingOverlay');
 const loadingText = document.getElementById('loadingText');
+const bootOverlay = document.getElementById('bootOverlay');
 
 // Hands & Stats (merged) tab
 const tabButtons = [...document.querySelectorAll('.tab-btn')];
@@ -46,6 +47,7 @@ const advancedGraphChart = document.getElementById('advancedGraphChart');
 const legendTotal = document.getElementById('legendTotal');
 const legendShowdown = document.getElementById('legendShowdown');
 const legendNonShowdown = document.getElementById('legendNonShowdown');
+const legendEV = document.getElementById('legendEV');
 const handsDbLabel = document.getElementById('handsDbLabel');
 const handsTableHeadRow = document.getElementById('handsTableHeadRow');
 const handsTableBody = document.getElementById('handsTableBody');
@@ -152,6 +154,21 @@ function showToast(message) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.add('hidden'), 2200);
 }
+
+// The one-time database backfill (see main.js/src/backfillWorker.js) now
+// runs on a background worker thread specifically so it never blocks this
+// window — the app stays fully usable while it runs, which is why there's
+// no "please wait" overlay here for it. This only surfaces the outcome:
+// silent on a normal launch (the common case — nothing left to backfill,
+// which is most launches after the first one following an update), a brief
+// toast plus a quiet re-fetch of whatever's currently on screen if it
+// actually found and fixed something.
+window.weplayConverter.onBackfillStatus((status) => {
+  if (status.phase === 'done' && (status.deepStatsFixed > 0 || status.evFixed > 0)) {
+    showToast('Finished a one-time database update in the background — stats refreshed.');
+    if (mainState.loaded) refreshEverything({ quiet: true });
+  }
+});
 
 function buildSupportReport(fileName, hand) {
   const lines = [];
@@ -541,6 +558,20 @@ function fmtPct(n) {
   return n == null ? '—' : `${n.toFixed(1)}%`;
 }
 
+// "$0.25/$0.50" -> "NL50" — the poker-community limit name, always derived
+// from the big blind itself (NL = 100 * bb in $), never a hardcoded
+// per-stake lookup table. stakesLabel is always "$sb/$bb" (see stats.js's
+// analyzeHand), the same format handReplay.js and hand-detail.js already
+// parse bb out of elsewhere in this app — reusing that exact pattern here
+// rather than plumbing a separate numeric bb value through every call site
+// that only ever had the formatted label string to begin with.
+function formatStakesLimit(stakesLabel) {
+  if (!stakesLabel) return stakesLabel;
+  const m = /\$([0-9.]+)$/.exec(stakesLabel);
+  if (!m) return stakesLabel;
+  return `NL${Math.round(parseFloat(m[1]) * 100)}`;
+}
+
 function moneyClass(n) {
   if (n == null || n === 0) return '';
   return n > 0 ? 'positive' : 'negative';
@@ -550,8 +581,10 @@ function statCard(label, value, valueClass, sub) {
   const card = document.createElement('div');
   card.className = 'stat-card';
   card.innerHTML = `
-    <div class="stat-card-label">${escapeHtml(label)}</div>
-    <div class="stat-card-value ${valueClass || ''}">${value}</div>
+    <div class="stat-card-main">
+      <span class="stat-card-label">${escapeHtml(label)}</span>
+      <span class="stat-card-value ${valueClass || ''}">${value}</span>
+    </div>
     ${sub ? `<div class="stat-card-sub">${sub}</div>` : ''}
   `;
   return card;
@@ -587,7 +620,10 @@ async function refreshFilterOptions() {
   const prevStakes = filterStakes.value;
   const prevTableCategory = filterTableCategory.value;
   filterPosition.innerHTML = '<option value="">All</option>' + opts.positions.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
-  filterStakes.innerHTML = '<option value="">All</option>' + opts.stakes.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+  // Value stays the raw "$sb/$bb" label — that's what the backend filter
+  // actually matches against (see buildWhereClause's f.stakesLabel) — only
+  // the displayed text is the NL-formatted limit name.
+  filterStakes.innerHTML = '<option value="">All</option>' + opts.stakes.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(formatStakesLimit(s))}</option>`).join('');
   filterTableCategory.innerHTML = '<option value="">All</option>' + opts.tableCategories.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(formatTableCategory(c))}</option>`).join('');
   if (opts.positions.includes(prevPos)) filterPosition.value = prevPos;
   if (opts.stakes.includes(prevStakes)) filterStakes.value = prevStakes;
@@ -611,7 +647,7 @@ function homeStakesLabel(byStake) {
   for (const bucket of Object.values(byStake || {})) {
     if (!best || bucket.hands > best.hands) best = bucket;
   }
-  return best ? best.stakesLabel : null;
+  return best ? formatStakesLimit(best.stakesLabel) : null;
 }
 
 // Player Overview: a compact, at-a-glance summary — the same 9 headline
@@ -643,9 +679,6 @@ function renderStats(payload) {
   statsCards.appendChild(statCard('WWSF', fmtPct(stats.wonWhenSawFlop), '', 'saw flop'));
   statsCards.appendChild(statCard('Expected V', evBb100 != null ? `${evBb100.toFixed(1)} bb/100` : '—', moneyClass(evBb100), evAdjustedHandCount ? `${evAdjustedHandCount} all-in adj.` : 'no all-ins yet'));
   statsCards.appendChild(statCard('3Bet', fmtPct(stats.threeBet), '', `${stats.threeBetOppCount} opps`));
-  if (stats.bombPotHands > 0) {
-    statsCards.appendChild(statCard('Bomb Pot Hands', String(stats.bombPotHands), '', 'excluded above'));
-  }
 
   if (stats.timeline.length >= 2) {
     statsChartWrap.classList.remove('hidden');
@@ -706,10 +739,13 @@ function renderHudTable(stats) {
       ],
     },
     {
-      title: 'Steal',
+      title: 'Steal & Check-Raise',
       rows: [
         hudRow('Attempt to Steal', fmtPct(stats.attemptSteal), stats.stealOppCount, 'pos'),
         hudRow('Fold to Steal', fmtPct(stats.foldToSteal), stats.foldToStealOppCount, 'neg'),
+        hudRow('Flop Check-Raise', fmtPct(stats.flopCheckRaise), stats.flopCheckRaiseOpportunities, 'pos'),
+        hudRow('Turn Check-Raise', fmtPct(stats.turnCheckRaise), stats.turnCheckRaiseOpportunities, 'pos'),
+        hudRow('River Check-Raise', fmtPct(stats.riverCheckRaise), stats.riverCheckRaiseOpportunities, 'pos'),
       ],
     },
     {
@@ -721,14 +757,6 @@ function renderHudTable(stats) {
         hudRow('Fold to Flop C-Bet', fmtPct(stats.flopFoldToCbet), stats.flopFoldToCbetOpportunities, 'neg'),
         hudRow('Fold to Turn C-Bet', fmtPct(stats.turnFoldToCbet), stats.turnFoldToCbetOpportunities, 'neg'),
         hudRow('Fold to River C-Bet', fmtPct(stats.riverFoldToCbet), stats.riverFoldToCbetOpportunities, 'neg'),
-      ],
-    },
-    {
-      title: 'Check-Raise',
-      rows: [
-        hudRow('Flop Check-Raise', fmtPct(stats.flopCheckRaise), stats.flopCheckRaiseOpportunities, 'pos'),
-        hudRow('Turn Check-Raise', fmtPct(stats.turnCheckRaise), stats.turnCheckRaiseOpportunities, 'pos'),
-        hudRow('River Check-Raise', fmtPct(stats.riverCheckRaise), stats.riverCheckRaiseOpportunities, 'pos'),
       ],
     },
     {
@@ -823,7 +851,8 @@ function buildAdvancedTimelineChartSvg(timeline, showdownFilter) {
   const totalValues = timeline.map((t) => t.cumulative);
   const showdownValues = timeline.map((t) => t.cumulativeShowdown);
   const nonShowdownValues = timeline.map((t) => t.cumulativeNonShowdown);
-  const allValues = [...totalValues, ...showdownValues, ...nonShowdownValues];
+  const evValues = timeline.map((t) => t.cumulativeEV);
+  const allValues = [...totalValues, ...showdownValues, ...nonShowdownValues, ...evValues];
   const dataMin = Math.min(0, ...allValues);
   const dataMax = Math.max(0, ...allValues);
   const yTicks = ChartMath.computeNiceTicks(dataMin, dataMax, 7, 5);
@@ -869,9 +898,18 @@ function buildAdvancedTimelineChartSvg(timeline, showdownFilter) {
   // showdown/non-showdown isn't all zeros, and showing three lines (two of
   // them redundant or flat at zero) would just be clutter. Show exactly one
   // line, colored to match the selected bucket, not green.
+  //
+  // The EV-adjusted (yellow, dashed) line is only ever drawn alongside a
+  // showdown-inclusive selection — evAdjustmentBB is only ever non-null for
+  // hands where hero's cards were shown at showdown (see evAnalysis.js), so
+  // in the "not shown" filter it's identical to the actual-results line and
+  // would just be a redundant dashed overlay on top of it.
   let lines;
   if (showdownFilter === 'shown') {
-    lines = `<polyline points="${lineFor(totalValues)}" fill="none" stroke="var(--info)" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" />`;
+    lines = `
+      <polyline points="${lineFor(totalValues)}" fill="none" stroke="var(--info)" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" />
+      <polyline points="${lineFor(evValues)}" fill="none" stroke="var(--ev-line)" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4" />
+    `;
   } else if (showdownFilter === 'not-shown') {
     lines = `<polyline points="${lineFor(totalValues)}" fill="none" stroke="var(--danger)" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" />`;
   } else {
@@ -879,6 +917,7 @@ function buildAdvancedTimelineChartSvg(timeline, showdownFilter) {
       <polyline points="${lineFor(nonShowdownValues)}" fill="none" stroke="var(--danger)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity="0.9" />
       <polyline points="${lineFor(showdownValues)}" fill="none" stroke="var(--info)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity="0.9" />
       <polyline points="${lineFor(totalValues)}" fill="none" stroke="var(--ok)" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" />
+      <polyline points="${lineFor(evValues)}" fill="none" stroke="var(--ev-line)" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4" />
     `;
   }
 
@@ -901,18 +940,20 @@ function renderAdvancedGraph(handTimeline, showdownFilter) {
     legendTotal.classList.remove('hidden');
     legendShowdown.classList.remove('hidden');
     legendNonShowdown.classList.remove('hidden');
+    legendEV.classList.remove('hidden');
     return;
   }
   const first = handTimeline[0], last = handTimeline[handTimeline.length - 1];
   advancedGraphLabel.textContent = `${handTimeline.length.toLocaleString()} hands matching current filters (${first.date} to ${last.date})`;
   advancedGraphChart.innerHTML = buildAdvancedTimelineChartSvg(handTimeline, showdownFilter);
   // The legend only shows swatches for lines actually being drawn — with
-  // the "Went to Showdown" filter narrowed to one side, only one line
-  // renders (see buildAdvancedTimelineChartSvg), so showing all three
-  // swatches would advertise colors that aren't on the chart at all.
+  // the "Went to Showdown" filter narrowed to one side, only one or two
+  // lines render (see buildAdvancedTimelineChartSvg), so showing every
+  // swatch would advertise colors that aren't on the chart at all.
   legendTotal.classList.toggle('hidden', showdownFilter === 'shown' || showdownFilter === 'not-shown');
   legendShowdown.classList.toggle('hidden', showdownFilter === 'not-shown');
   legendNonShowdown.classList.toggle('hidden', showdownFilter === 'shown');
+  legendEV.classList.toggle('hidden', showdownFilter === 'not-shown');
 }
 
 // ── Hands table ──────────────────────────────────────────────────────────
@@ -975,7 +1016,7 @@ function setSort(field) {
 const HANDS_COLUMNS = [
   { key: 'date', colId: 'colDate', label: 'Date', sortBy: 'date' },
   { key: 'time', colId: 'colTime', label: 'Time' },
-  { key: 'stakesLabel', colId: 'colStakes', label: 'Stakes', sortBy: 'stakes' },
+  { key: 'stakesLabel', colId: 'colStakes', label: 'Stakes', sortBy: 'stakes', render: (v) => escapeHtml(formatStakesLimit(v)) },
   { key: 'tableCategory', colId: 'colTableCat', label: 'Table', sortBy: 'table', render: (v) => escapeHtml(formatTableCategory(v)) },
   { key: 'tableCategory', colId: 'colBomb', label: 'Bomb', align: 'center', render: (v) => (v && v.includes('bombpot') ? '<span class="bomb-icon" title="Bomb pot">💣</span>' : '') },
   { key: 'position', colId: 'colPos', label: 'Pos', sortBy: 'position', render: (v) => escapeHtml(v || '—') },
@@ -1157,17 +1198,25 @@ async function refreshEverything({ resetPage, quiet } = {}) {
 
 async function loadHandsAndStats() {
   mainState.loaded = true;
-  // Player perspective and filters must be resolved BEFORE the first data
-  // fetch — otherwise the very first table/stats render blends every hero
-  // in the database together (only self-correcting once the user touches a
-  // filter) — exactly the multi-hero mixing the perspective selector
-  // exists to prevent in the first place.
-  await refreshPlayerOptions();
-  externalFilters = currentFilters();
-  await refreshFilterOptions();
-  initHandsTable();
-  await refreshStats();
-  await loadHandsPage();
+  try {
+    // Player perspective and filters must be resolved BEFORE the first data
+    // fetch — otherwise the very first table/stats render blends every hero
+    // in the database together (only self-correcting once the user touches a
+    // filter) — exactly the multi-hero mixing the perspective selector
+    // exists to prevent in the first place.
+    await refreshPlayerOptions();
+    externalFilters = currentFilters();
+    await refreshFilterOptions();
+    initHandsTable();
+    await refreshStats();
+    await loadHandsPage();
+  } finally {
+    // Always clear the boot screen, even if something above threw — a
+    // permanent "Loading your hands…" screen because one of these calls
+    // failed would be a much worse outcome than showing the (now real, if
+    // partially empty) app underneath and letting the user see what broke.
+    bootOverlay.classList.add('hidden');
+  }
 }
 
 importDbBtn.addEventListener('click', async () => {
