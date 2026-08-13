@@ -694,6 +694,143 @@ Total pot $1.75 | Rake $0
 Seat 1: PlayerA (small blind) collected ($1.75)
 Seat 2: Hero (big blind) folded on the Flop`;
 
+// Hero raises from the button into a fully unopened pot — a genuine steal
+// attempt (RFI restricted to CO/BTN/SB).
+const HAND_ATTEMPT_STEAL_BTN = `Weplay Hand #913:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:13:00 UTC
+Table 'Test'(111) 6-max Seat #2 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+Seat 3: PlayerC ($50 in chips)
+Seat 4: PlayerD ($50 in chips)
+PlayerC: posts small blind $0.25
+PlayerD: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kh]
+PlayerA: folds
+Hero: raises $1.5 to $1.5
+PlayerC: folds
+PlayerD: folds
+Uncalled bet ($1) returned to Hero
+*** SHOW DOWN ***
+Hero collected $0.75 from pot
+*** SUMMARY ***
+Total pot $0.75 | Rake $0
+Seat 1: PlayerA folded before Flop
+Seat 2: Hero collected ($0.75)
+Seat 3: PlayerC (small blind) folded before Flop
+Seat 4: PlayerD (big blind) folded before Flop`;
+
+// Hero raises first-in from UTG (an early position) — real RFI, but NOT a
+// steal attempt (steal is specifically CO/BTN/SB).
+const HAND_RFI_EARLY_POSITION_NOT_STEAL = `Weplay Hand #914:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:14:00 UTC
+Table 'Test'(111) 6-max Seat #2 is the button
+Seat 1: Hero ($50 in chips)
+Seat 2: PlayerB ($50 in chips)
+Seat 3: PlayerC ($50 in chips)
+Seat 4: PlayerD ($50 in chips)
+PlayerC: posts small blind $0.25
+PlayerD: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kh]
+Hero: raises $1.5 to $1.5
+PlayerB: folds
+PlayerC: folds
+PlayerD: folds
+Uncalled bet ($1) returned to Hero
+*** SHOW DOWN ***
+Hero collected $0.75 from pot
+*** SUMMARY ***
+Total pot $0.75 | Rake $0
+Seat 1: Hero collected ($0.75)
+Seat 2: PlayerB folded before Flop
+Seat 3: PlayerC (small blind) folded before Flop
+Seat 4: PlayerD (big blind) folded before Flop`;
+
+// Hero (BB) faces a genuine steal raise from the button, with no one else
+// having called it, and folds.
+const HAND_FOLD_TO_STEAL = `Weplay Hand #915:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:15:00 UTC
+Table 'Test'(111) 6-max Seat #2 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: PlayerB ($50 in chips)
+Seat 3: PlayerC ($50 in chips)
+Seat 4: Hero ($50 in chips)
+PlayerC: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: folds
+PlayerB: raises $1.5 to $1.5
+PlayerC: folds
+Hero: folds
+Uncalled bet ($1) returned to PlayerB
+*** SHOW DOWN ***
+PlayerB collected $1 from pot
+*** SUMMARY ***
+Total pot $1 | Rake $0
+Seat 1: PlayerA folded before Flop
+Seat 2: PlayerB collected ($1)
+Seat 3: PlayerC (small blind) folded before Flop
+Seat 4: Hero (big blind) folded before Flop`;
+
+// Same steal-raise setup, but hero calls (defends) instead of folding.
+const HAND_STEAL_DEFENSE_CALLED = `Weplay Hand #917:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:17:00 UTC
+Table 'Test'(111) 6-max Seat #2 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: PlayerB ($50 in chips)
+Seat 3: PlayerC ($50 in chips)
+Seat 4: Hero ($50 in chips)
+PlayerC: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kh]
+PlayerA: folds
+PlayerB: raises $1.5 to $1.5
+PlayerC: folds
+Hero: calls $1
+*** FLOP *** [2c 7d 9s]
+Hero: checks
+PlayerB: bets $1
+Hero: folds
+Uncalled bet ($1) returned to PlayerB
+*** SHOW DOWN ***
+PlayerB collected $3.75 from pot
+*** SUMMARY ***
+Total pot $3.75 | Rake $0
+Seat 1: PlayerA folded before Flop
+Seat 2: PlayerB collected ($3.75)
+Seat 3: PlayerC (small blind) folded before Flop
+Seat 4: Hero (big blind) folded on the Flop`;
+
+// The same steal-eligible raise, but PlayerC calls it before hero acts —
+// a live caller in between disqualifies this as a clean steal-defense spot.
+const HAND_STEAL_DEFENSE_DISQUALIFIED_BY_CALLER = `Weplay Hand #916:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:16:00 UTC
+Table 'Test'(111) 6-max Seat #2 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: PlayerB ($50 in chips)
+Seat 3: PlayerC ($50 in chips)
+Seat 4: Hero ($50 in chips)
+PlayerC: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: folds
+PlayerB: raises $1.5 to $1.5
+PlayerC: calls $1.25
+Hero: folds
+*** FLOP *** [2c 7d 9s]
+PlayerC: checks
+PlayerB: bets $1
+PlayerC: folds
+Uncalled bet ($1) returned to PlayerB
+*** SHOW DOWN ***
+PlayerB collected $3.75 from pot
+*** SUMMARY ***
+Total pot $3.75 | Rake $0
+Seat 1: PlayerA folded before Flop
+Seat 2: PlayerB collected ($3.75)
+Seat 3: PlayerC (small blind) folded on the Flop
+Seat 4: Hero (big blind) folded before Flop`;
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 test('checking as BB with no raise is NOT voluntary — VPIP stays false', () => {
@@ -932,6 +1069,53 @@ test('checking through (both players check, street just ends) creates no check-r
   // Hero's river bet was the FIRST action of the river, not a response to
   // being checked back to after their own check.
   assert.deepStrictEqual(r.checkRaiseByStreet.RIVER, { opp: 0, cr: 0 });
+});
+
+test('attempt to steal: hero raises an unopened pot from the button', () => {
+  const r = analyzeHand(HAND_ATTEMPT_STEAL_BTN, 'Hero');
+  assert.strictEqual(r.position, 'BTN');
+  assert.strictEqual(r.rfi, true);
+  assert.strictEqual(r.attemptSteal, true);
+  assert.strictEqual(r.stealOpportunity, true);
+});
+
+test('RFI from an early position is real RFI but NOT a steal attempt', () => {
+  const r = analyzeHand(HAND_RFI_EARLY_POSITION_NOT_STEAL, 'Hero');
+  assert.strictEqual(r.position, 'UTG');
+  assert.strictEqual(r.rfi, true);
+  assert.strictEqual(r.attemptSteal, false, 'steal is specifically CO/BTN/SB, not every RFI');
+  assert.strictEqual(r.stealOpportunity, false);
+});
+
+test('fold to steal: hero (BB) folds to a genuine steal raise from the button with no callers in between', () => {
+  const r = analyzeHand(HAND_FOLD_TO_STEAL, 'Hero');
+  assert.strictEqual(r.stealDefenseOpportunity, true);
+  assert.strictEqual(r.foldedToSteal, true);
+});
+
+test('steal defense declined via call — the opportunity existed but hero defended instead of folding', () => {
+  const r = analyzeHand(HAND_STEAL_DEFENSE_CALLED, 'Hero');
+  assert.strictEqual(r.stealDefenseOpportunity, true);
+  assert.strictEqual(r.foldedToSteal, false, 'hero called at the steal-defense decision point — the later flop fold is a different decision');
+});
+
+test('a live caller between the raiser and hero disqualifies steal defense', () => {
+  const r = analyzeHand(HAND_STEAL_DEFENSE_DISQUALIFIED_BY_CALLER, 'Hero');
+  assert.strictEqual(r.stealDefenseOpportunity, false, 'PlayerC called the raise before hero acted — no longer a clean heads-up steal-defense spot');
+  assert.strictEqual(r.foldedToSteal, false);
+});
+
+test('aggregateStats: Attempt to Steal% and Fold to Steal% use the real opportunity counts', () => {
+  const stole = analyzeHand(HAND_ATTEMPT_STEAL_BTN, 'Hero'); // attemptSteal true, stealOpportunity true
+  const earlyRfi = analyzeHand(HAND_RFI_EARLY_POSITION_NOT_STEAL, 'Hero'); // rfi true, but not a steal opportunity at all
+  const folded = analyzeHand(HAND_FOLD_TO_STEAL, 'Hero'); // stealDefenseOpportunity true, foldedToSteal true
+  const called = analyzeHand(HAND_STEAL_DEFENSE_CALLED, 'Hero'); // stealDefenseOpportunity true, foldedToSteal false
+  const disqualified = analyzeHand(HAND_STEAL_DEFENSE_DISQUALIFIED_BY_CALLER, 'Hero'); // neither flag set — a caller ruined the spot
+  const stats = aggregateStats([stole, earlyRfi, folded, called, disqualified]);
+  assert.strictEqual(stats.stealOppCount, 1, 'only the button hand ever put hero in CO/BTN/SB with the pot unopened');
+  assert.strictEqual(stats.attemptSteal, 100);
+  assert.strictEqual(stats.foldToStealOppCount, 2, 'the disqualified-by-caller hand must not count toward this denominator either');
+  assert.strictEqual(stats.foldToSteal, 50, '1 of 2 real opportunities taken');
 });
 
 test('aggregateStats: Check-Raise% per street divides by real opportunities only', () => {

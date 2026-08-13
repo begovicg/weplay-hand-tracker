@@ -151,17 +151,32 @@ function analyzeHand(block, heroNameOverride) {
   const statedButton = buttonMatch ? parseInt(buttonMatch[1], 10) : occupiedSeatNums[0];
   const effectiveButton = computeEffectiveButton(occupiedSeatNums, sbSeat ? sbSeat.num : null, statedButton);
 
+  // order/labels are hoisted out of the `if` below (rather than computed
+  // only for hero) so positionForName can reuse them for ANY seated player,
+  // not just hero — a cheap, targeted lookup (not a full per-player
+  // position table) needed for steal-defense detection further down: to
+  // know whether a raise hero is facing was itself a genuine steal (an open
+  // from CO/BTN/SB), the RAISER's position has to be known too, not just
+  // hero's own.
   let position = null;
+  let order = []; // seat numbers starting right after the button (SB) around to the button itself
+  let labels = [];
   if (occupiedSeatNums.includes(effectiveButton)) {
     const btnIdx = occupiedSeatNums.indexOf(effectiveButton);
     const n = occupiedSeatNums.length;
-    const order = []; // seat numbers starting right after the button (SB) around to the button itself
     for (let i = 1; i <= n; i++) order.push(occupiedSeatNums[(btnIdx + i) % n]);
-    const labels = positionLabelsFor(n);
+    labels = positionLabelsFor(n);
     const heroSeat = seats.find((s) => s.name === hero);
     const idx = order.indexOf(heroSeat.num);
     if (idx !== -1) position = labels[idx];
   }
+  function positionForName(name) {
+    const seat = seats.find((s) => s.name === name);
+    if (!seat) return null;
+    const idx = order.indexOf(seat.num);
+    return idx === -1 ? null : labels[idx];
+  }
+  const LATE_POSITIONS = new Set(['CO', 'BTN', 'SB']);
 
   let street = 'PREFLOP';
   let contributed = 0;
@@ -197,6 +212,17 @@ function analyzeHand(block, heroNameOverride) {
   let callersSinceLastRaise = 0;
   let squeezeOpportunity = false; // facing a raise with >=1 caller in between, at least once (any response counts)
   let squeeze = false; // ...and hero re-raised
+  // Steal defense: hero (in the SB or BB) facing a genuine steal raise — an
+  // open, by CO/BTN/SB, into a still-fully-unopened pot, with no one else
+  // having called it yet. openRaiserName/openRaiserIsLatePosition capture
+  // whether the FIRST raise of the hand (by anyone) qualifies; Attempt to
+  // Steal itself needs no separate tracking — it's exactly RFI (already
+  // tracked below) restricted to hero being in CO/BTN/SB, computed after
+  // the loop from rfi/rfiOpportunity + position.
+  let openRaiserName = null;
+  let openRaiserIsLatePosition = false;
+  let stealDefenseOpportunity = false;
+  let foldedToSteal = false;
   // RFI (Raised First In): distinct from PFR, which counts every preflop
   // raise (opens, isolates, 3-bets, 4-bets+). RFI isolates just "hero was
   // the first player to voluntarily put money in the pot" — the number that
@@ -317,12 +343,19 @@ function analyzeHand(block, heroNameOverride) {
         if (street === 'PREFLOP' && preflopRaiseCount === 1) {
           facedThreeBetOpportunity = true;
           if (callersSinceLastRaise >= 1) squeezeOpportunity = true;
+          // Steal defense: hero is in the SB/BB, facing a genuine steal
+          // raise (open, by CO/BTN/SB, into what was an unopened pot) with
+          // no one else having called it yet.
+          if (openRaiserIsLatePosition && callersSinceLastRaise === 0 && (position === 'SB' || position === 'BB')) {
+            stealDefenseOpportunity = true;
+          }
         }
         if (street === 'PREFLOP' && preflopRaiseCount === 2) facedFourBetOpportunity = true;
         inHandThisFar = false;
         if (street === 'PREFLOP') { heroLastPreflopAction = { type: 'fold', level: preflopRaiseCount }; }
         if (street === 'PREFLOP' && facedThreeBetAfterOpening) foldedToThreeBet = true;
         if (street === 'PREFLOP' && facedFourBetAfterThreeBetting) foldedToFourBet = true;
+        if (street === 'PREFLOP' && stealDefenseOpportunity && preflopRaiseCount === 1) foldedToSteal = true;
         if (streetAgg[street]) streetAgg[street].folds++;
         if (awaitingCheckRaise[street]) { checkRaiseByStreet[street].opp++; awaitingCheckRaise[street] = false; } // check-folded, not check-raised
       }
@@ -344,6 +377,9 @@ function analyzeHand(block, heroNameOverride) {
         if (street === 'PREFLOP' && preflopRaiseCount === 1) {
           facedThreeBetOpportunity = true;
           if (callersSinceLastRaise >= 1) squeezeOpportunity = true;
+          if (openRaiserIsLatePosition && callersSinceLastRaise === 0 && (position === 'SB' || position === 'BB')) {
+            stealDefenseOpportunity = true;
+          }
           // Cold call: calling the opening raise with zero money already
           // invested (see coldCallOpportunity's declaration for why).
           if (contributed === 0) { coldCallOpportunity = true; coldCall = true; }
@@ -380,6 +416,15 @@ function analyzeHand(block, heroNameOverride) {
     if ((m = RE_RAISE.exec(l))) {
       const who = m[1];
       const amt = parseFloat(m[2]);
+      // The first raise of the hand, made into a still-fully-unopened pot —
+      // a genuine steal-eligible open, regardless of who made it. Checked
+      // BEFORE anyVoluntaryPreflopAction updates below, and only ever true
+      // once per hand (preflopRaiseCount === 0 only holds for this first
+      // raise).
+      if (street === 'PREFLOP' && preflopRaiseCount === 0 && !anyVoluntaryPreflopAction) {
+        openRaiserName = who;
+        openRaiserIsLatePosition = LATE_POSITIONS.has(positionForName(who));
+      }
       if (who === hero) {
         // Hero's first preflop decision, and it's a raise into a still-fully-
         // unopened pot — exactly RFI (as opposed to PFR generally, which
@@ -389,6 +434,9 @@ function analyzeHand(block, heroNameOverride) {
           facedThreeBetOpportunity = true;
           madeThreeBet = true;
           if (callersSinceLastRaise >= 1) { squeezeOpportunity = true; squeeze = true; }
+          if (openRaiserIsLatePosition && callersSinceLastRaise === 0 && (position === 'SB' || position === 'BB')) {
+            stealDefenseOpportunity = true;
+          }
         }
         if (street === 'PREFLOP' && preflopRaiseCount === 2) { facedFourBetOpportunity = true; madeFourBet = true; }
         contributed += amt;
@@ -428,6 +476,13 @@ function analyzeHand(block, heroNameOverride) {
   for (const l of lines) { if (RE_COLLECTED.test(l)) { hasResolution = true; break; } }
   if (!hasResolution) return null;
 
+  // Attempt to Steal: exactly RFI (raising into a still-unopened pot),
+  // restricted to hero being in CO/BTN/SB — no separate tracking needed,
+  // both rfi/rfiOpportunity and position are already known by this point.
+  const isLatePosition = LATE_POSITIONS.has(position);
+  const stealOpportunity = rfiOpportunity && isLatePosition;
+  const attemptSteal = rfi && isLatePosition;
+
   return {
     handId, bb, date: `${y}-${mo}-${d}`, time: `${hh.padStart(2, '0')}:${mm}:${ss}`, maxSeats,
     position, isBombPot,
@@ -439,6 +494,10 @@ function analyzeHand(block, heroNameOverride) {
     coldCallOpportunity,
     coldCall,
     limped,
+    stealOpportunity,
+    attemptSteal,
+    stealDefenseOpportunity,
+    foldedToSteal,
     threeBet: madeThreeBet,
     facedThreeBetOpportunity,
     foldedToThreeBet,
@@ -554,6 +613,16 @@ function aggregateStats(allHands) {
   // extra "someone called in between" condition.
   const squeezeCount = nonBomb.filter((h) => h.squeeze).length;
   const squeezeOppCount = nonBomb.filter((h) => h.squeezeOpportunity).length;
+
+  // Attempt to Steal%: (times raised into an unopened pot from CO/BTN/SB) /
+  // (times hero was in CO/BTN/SB with the pot still unopened when they
+  // acted). Fold to Steal%: (times hero, in the SB/BB, folded to a genuine
+  // steal raise) / (times hero faced that exact situation — no one else
+  // having called it yet).
+  const stealCount = nonBomb.filter((h) => h.attemptSteal).length;
+  const stealOppCount = nonBomb.filter((h) => h.stealOpportunity).length;
+  const foldToStealCount = nonBomb.filter((h) => h.foldedToSteal).length;
+  const foldToStealOppCount = nonBomb.filter((h) => h.stealDefenseOpportunity).length;
 
   const sawFlopHands = allHands.filter((h) => h.sawFlop);
   // WTSD%: (times reached a genuine showdown) / (times saw the flop) —
@@ -717,6 +786,10 @@ function aggregateStats(allHands) {
     foldToFourBetOppCount,
     squeeze: pct(squeezeCount, squeezeOppCount),
     squeezeOppCount,
+    attemptSteal: pct(stealCount, stealOppCount),
+    stealOppCount,
+    foldToSteal: pct(foldToStealCount, foldToStealOppCount),
+    foldToStealOppCount,
     wtsd: pct(wtsdHands.length, sawFlopHands.length),
     wonAtShowdown: pct(wonShowdownCount, wtsdHands.length),
     wonWhenSawFlop: pct(wonWhenSawFlopCount, sawFlopHands.length),
