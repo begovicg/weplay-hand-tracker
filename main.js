@@ -422,8 +422,8 @@ ipcMain.handle('open-hand-window', async (event, handId, perspectivePlayer) => {
   }
 
   const win = new BrowserWindow({
-    width: 640,
-    height: 720,
+    width: 700,
+    height: 620,
     minWidth: 480,
     minHeight: 420,
     backgroundColor: '#0e0e0f',

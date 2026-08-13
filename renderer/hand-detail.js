@@ -15,12 +15,13 @@ const SUIT_CLASS = { s: 'suit-s', h: 'suit-h', d: 'suit-d', c: 'suit-c' };
 
 function renderCards(cardsStr) {
   if (!cardsStr) return '';
-  return cardsStr.trim().split(/\s+/).filter(Boolean).map((c) => {
+  const badges = cardsStr.trim().split(/\s+/).filter(Boolean).map((c) => {
     const rank = c.slice(0, -1);
     const suit = c.slice(-1).toLowerCase();
     const cls = SUIT_CLASS[suit] || 'suit-s';
     return `<span class="card-badge ${cls}">${escapeHtml(rank)}</span>`;
   }).join('');
+  return `<span class="hf-cards">${badges}</span>`;
 }
 
 function renderActionLine(actions, heroName) {
@@ -61,8 +62,7 @@ function renderFormatted(replay) {
   }
 
   if (replay.heroCards) {
-    parts.push(`<div class="hf-dealt-line">Dealt to ${escapeHtml(replay.heroName)}:</div>`);
-    parts.push(`<div>${renderCards(replay.heroCards)}</div>`);
+    parts.push(`<div class="hf-dealt-line"><span>Dealt to ${escapeHtml(replay.heroName)}:</span>${renderCards(replay.heroCards)}</div>`);
   }
 
   if (replay.preflopActions.length) {
@@ -71,8 +71,7 @@ function renderFormatted(replay) {
 
   function renderStreet(label, street) {
     if (!street) return;
-    parts.push(`<div class="hf-street-header">${escapeHtml(label)} (${street.potBB} BB, ${street.players} player${street.players === 1 ? '' : 's'}):</div>`);
-    parts.push(`<div>${renderCards(street.board.join(' '))}</div>`);
+    parts.push(`<div class="hf-street-header"><span>${escapeHtml(label)} (${street.potBB} BB, ${street.players} player${street.players === 1 ? '' : 's'}):</span>${renderCards(street.board.join(' '))}</div>`);
     if (street.actions.length) {
       parts.push(`<div class="hf-action-line">${renderActionLine(street.actions, replay.heroName)}</div>`);
     }
@@ -89,9 +88,7 @@ function renderFormatted(replay) {
   }
 
   for (const sd of replay.showdown) {
-    parts.push(`<div class="hf-shows-line ${sd.isHero ? 'hero' : ''}">${escapeHtml(sd.name)} shows:</div>`);
-    parts.push(`<div>${renderCards(sd.cards)}</div>`);
-    parts.push(`<div class="hf-handtype-line">(${escapeHtml(sd.handType)})</div>`);
+    parts.push(`<div class="hf-shows-line ${sd.isHero ? 'hero' : ''}"><span class="hf-shows-name">${escapeHtml(sd.name)} shows:</span>${renderCards(sd.cards)}<span class="hf-handtype-line">(${escapeHtml(sd.handType)})</span></div>`);
   }
 
   if (replay.winners.length === 0) {
