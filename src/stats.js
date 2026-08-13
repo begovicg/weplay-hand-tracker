@@ -175,6 +175,18 @@ function analyzeHand(block, heroNameOverride) {
   let hadThreeBetOpportunityAfterOpening = false; // hero's OWN open specifically got re-raised at some point
   let foldedToThreeBet = false;
   let heroOpenedPreflop = false;
+  // 4-Bet stats mirror the 3-bet ones exactly one raise level deeper: a
+  // 4-bet is hero re-raising while facing exactly two prior raises (the
+  // open + a 3-bet), and Fold to 4-Bet mirrors the same narrower "after MY
+  // OWN raise got re-raised" definition already used for Fold to 3-Bet
+  // above, for internal consistency — both "fold to Xbet" stats answer the
+  // same question (did hero's own aggression get re-raised, and did they
+  // fold to it) one level apart.
+  let madeFourBet = false; // hero re-raised while facing exactly two prior raises
+  let facedFourBetOpportunity = false; // hero faced exactly two prior raises at least once (any response counts)
+  let facedFourBetAfterThreeBetting = false; // true only between "hero's 3-bet got re-raised" and hero's next action
+  let hadFourBetOpportunityAfterThreeBetting = false; // hero's OWN 3-bet specifically got re-raised at some point
+  let foldedToFourBet = false;
   // RFI (Raised First In): distinct from PFR, which counts every preflop
   // raise (opens, isolates, 3-bets, 4-bets+). RFI isolates just "hero was
   // the first player to voluntarily put money in the pot" — the number that
@@ -279,9 +291,11 @@ function analyzeHand(block, heroNameOverride) {
         // re-raising, so this has to be checked on every one of hero's
         // preflop actions, not just the raises.
         if (street === 'PREFLOP' && preflopRaiseCount === 1) facedThreeBetOpportunity = true;
+        if (street === 'PREFLOP' && preflopRaiseCount === 2) facedFourBetOpportunity = true;
         inHandThisFar = false;
         if (street === 'PREFLOP') { heroLastPreflopAction = { type: 'fold', level: preflopRaiseCount }; }
         if (street === 'PREFLOP' && facedThreeBetAfterOpening) foldedToThreeBet = true;
+        if (street === 'PREFLOP' && facedFourBetAfterThreeBetting) foldedToFourBet = true;
         if (streetAgg[street]) streetAgg[street].folds++;
       }
       activePlayers.delete(who);
@@ -303,10 +317,12 @@ function analyzeHand(block, heroNameOverride) {
           if (contributed === 0) { coldCallOpportunity = true; coldCall = true; }
         }
         if (street === 'PREFLOP' && preflopRaiseCount === 0) limped = true;
+        if (street === 'PREFLOP' && preflopRaiseCount === 2) facedFourBetOpportunity = true;
         contributed += parseFloat(m[2]);
         if (street === 'PREFLOP') { voluntaryPreflopAction = true; heroLastPreflopAction = { type: 'call', level: preflopRaiseCount }; }
         else { postflopCalls++; if (streetAgg[street]) streetAgg[street].calls++; }
         if (street === 'PREFLOP' && facedThreeBetAfterOpening) facedThreeBetAfterOpening = false; // called it, didn't fold
+        if (street === 'PREFLOP' && facedFourBetAfterThreeBetting) facedFourBetAfterThreeBetting = false; // called it, didn't fold
       }
       // Tracks whether ANY player (not just hero) has voluntarily entered
       // the pot yet — feeds RFI opportunity detection above, so this has to
@@ -332,6 +348,7 @@ function analyzeHand(block, heroNameOverride) {
         // also counts isolates/3-bets/4-bets over an already-opened pot).
         if (noteHeroFirstPreflopDecision()) rfi = true;
         if (street === 'PREFLOP' && preflopRaiseCount === 1) { facedThreeBetOpportunity = true; madeThreeBet = true; }
+        if (street === 'PREFLOP' && preflopRaiseCount === 2) { facedFourBetOpportunity = true; madeFourBet = true; }
         contributed += amt;
         if (street === 'PREFLOP') {
           voluntaryPreflopAction = true;
@@ -339,6 +356,7 @@ function analyzeHand(block, heroNameOverride) {
           if (preflopRaiseCount === 0) heroOpenedPreflop = true;
           heroLastPreflopAction = { type: 'raise', level: preflopRaiseCount + 1 };
           if (facedThreeBetAfterOpening) facedThreeBetAfterOpening = false; // re-raised it (4-bet+), didn't fold
+          if (facedFourBetAfterThreeBetting) facedFourBetAfterThreeBetting = false; // re-raised it (5-bet+), didn't fold
         } else {
           postflopAggressive++;
           if (streetAgg[street]) streetAgg[street].agg++;
@@ -347,6 +365,10 @@ function analyzeHand(block, heroNameOverride) {
         // someone re-raised Hero's own open — a genuine 3-bet against Hero
         facedThreeBetAfterOpening = true;
         hadThreeBetOpportunityAfterOpening = true;
+      } else if (street === 'PREFLOP' && madeThreeBet && preflopRaiseCount === 2) {
+        // someone re-raised Hero's own 3-bet — a genuine 4-bet against Hero
+        facedFourBetAfterThreeBetting = true;
+        hadFourBetOpportunityAfterThreeBetting = true;
       }
       if (street === 'PREFLOP') { anyVoluntaryPreflopAction = true; preflopRaiseCount++; }
       continue;
@@ -378,6 +400,10 @@ function analyzeHand(block, heroNameOverride) {
     facedThreeBetOpportunity,
     foldedToThreeBet,
     hadThreeBetOpportunityAfterOpening,
+    fourBet: madeFourBet,
+    facedFourBetOpportunity,
+    foldedToFourBet,
+    hadFourBetOpportunityAfterThreeBetting,
     handCategory: handCategoryFor(preflopRaiseCount, heroLastPreflopAction),
     sawFlop,
     reachedShowdown,
@@ -466,6 +492,15 @@ function aggregateStats(allHands) {
   // denominator and made the fold rate look far lower than it really was.
   const foldToThreeBetCount = nonBomb.filter((h) => h.foldedToThreeBet).length;
   const foldToThreeBetOppCount = nonBomb.filter((h) => h.hadThreeBetOpportunityAfterOpening).length;
+
+  // 4-Bet% and Fold to 4-Bet%: exactly the same two patterns as 3-Bet% and
+  // Fold to 3-Bet% above, one raise level deeper. See analyzeHand's 4-bet
+  // comment for why Fold to 4-Bet mirrors the narrower "after MY OWN raise
+  // got re-raised" definition rather than a general "faced any 4-bet" one.
+  const fourBetCount = nonBomb.filter((h) => h.fourBet).length;
+  const fourBetOppCount = nonBomb.filter((h) => h.facedFourBetOpportunity).length;
+  const foldToFourBetCount = nonBomb.filter((h) => h.foldedToFourBet).length;
+  const foldToFourBetOppCount = nonBomb.filter((h) => h.hadFourBetOpportunityAfterThreeBetting).length;
 
   const sawFlopHands = allHands.filter((h) => h.sawFlop);
   // WTSD%: (times reached a genuine showdown) / (times saw the flop) —
@@ -606,6 +641,10 @@ function aggregateStats(allHands) {
     threeBetOppCount,
     foldToThreeBet: pct(foldToThreeBetCount, foldToThreeBetOppCount),
     foldToThreeBetOppCount,
+    fourBet: pct(fourBetCount, fourBetOppCount),
+    fourBetOppCount,
+    foldToFourBet: pct(foldToFourBetCount, foldToFourBetOppCount),
+    foldToFourBetOppCount,
     wtsd: pct(wtsdHands.length, sawFlopHands.length),
     wonAtShowdown: pct(wonShowdownCount, wtsdHands.length),
     wonWhenSawFlop: pct(wonWhenSawFlopCount, sawFlopHands.length),

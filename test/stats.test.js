@@ -533,6 +533,31 @@ Seat 2: PlayerB collected ($1.25)
 Seat 3: PlayerC (small blind) folded before Flop
 Seat 4: PlayerD (big blind) folded before Flop`;
 
+// Hero's own 3-bet specifically gets re-raised (a genuine 4-bet against
+// hero), and hero folds to it.
+const HAND_HERO_3BETS_FACES_4BET_FOLDS = `Weplay Hand #907:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:07:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($100 in chips)
+Seat 2: Hero ($100 in chips)
+Seat 3: PlayerC ($100 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Kc Kd]
+PlayerC: raises $1.5 to $1.5
+PlayerA: folds
+Hero: raises $4.5 to $6
+PlayerC: raises $12 to $18
+Hero: folds
+Uncalled bet ($1) returned to PlayerC
+*** SHOW DOWN ***
+PlayerC collected $25.75 from pot
+*** SUMMARY ***
+Total pot $25.75 | Rake $0
+Seat 1: PlayerA (small blind) folded before Flop
+Seat 2: Hero (big blind) folded before Flop
+Seat 3: PlayerC collected ($25.75)`;
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 test('checking as BB with no raise is NOT voluntary — VPIP stays false', () => {
@@ -680,6 +705,52 @@ test('aggregateStats basic math: net, BB/100, and win-at-showdown check out by h
   assert.strictEqual(stats.wtsd, 50, 'WTSD should divide by hands that saw a flop, not all hands');
   assert.strictEqual(stats.wonAtShowdown, 100);
   assert.strictEqual(stats.aggressionFactor, 1 / 1);
+});
+
+test('4-bet as raiser: hero opens, gets 3-bet, hero 4-bets — the same shape as the 3-bet stats, one level deeper', () => {
+  const r = analyzeHand(HAND_4BET_AS_RAISER, 'Hero');
+  assert.strictEqual(r.fourBet, true, 'hero re-raised while facing exactly two prior raises (the open + PlayerC\'s 3-bet)');
+  assert.strictEqual(r.facedFourBetOpportunity, true);
+  assert.strictEqual(r.hadFourBetOpportunityAfterThreeBetting, false, 'hero never even made a 3-bet here — they made the 4-bet themselves');
+  assert.strictEqual(r.foldedToFourBet, false);
+});
+
+test('4-bet as caller: hero 3-bets, faces a re-raise (a genuine 4-bet against hero), and calls it', () => {
+  const r = analyzeHand(HAND_4BET_AS_CALLER, 'Hero');
+  assert.strictEqual(r.threeBet, true, 'hero\'s raise to $6 came while facing exactly one prior raise');
+  assert.strictEqual(r.fourBet, false, 'hero called the 4-bet, did not re-raise it themselves');
+  // facedFourBetOpportunity tracks a DIFFERENT decision point than this one
+  // — "hero facing exactly two prior raises, deciding whether to make the
+  // 4-bet themselves" (see HAND_4BET_AS_RAISER). Here hero already used that
+  // decision point to make the 3-bet; PlayerC's re-raise of it is one level
+  // further along, tracked by hadFourBetOpportunityAfterThreeBetting below.
+  assert.strictEqual(r.facedFourBetOpportunity, false);
+  assert.strictEqual(r.hadFourBetOpportunityAfterThreeBetting, true, 'PlayerC specifically re-raised hero\'s own 3-bet');
+  assert.strictEqual(r.foldedToFourBet, false, 'hero called it, did not fold');
+});
+
+test('fold to 4-bet: hero\'s own 3-bet gets re-raised, and hero folds', () => {
+  const r = analyzeHand(HAND_HERO_3BETS_FACES_4BET_FOLDS, 'Hero');
+  assert.strictEqual(r.threeBet, true);
+  assert.strictEqual(r.hadFourBetOpportunityAfterThreeBetting, true, 'PlayerC re-raised hero\'s own 3-bet');
+  assert.strictEqual(r.foldedToFourBet, true);
+  assert.strictEqual(r.fourBet, false, 'hero folded, did not make a 4-bet themselves');
+});
+
+test('aggregateStats: 4-Bet% and Fold to 4-Bet% use the real opportunity counts, mirroring the 3-bet math one level deeper', () => {
+  const raiser = analyzeHand(HAND_4BET_AS_RAISER, 'Hero'); // facedFourBetOpportunity true, fourBet true
+  const caller = analyzeHand(HAND_4BET_AS_CALLER, 'Hero'); // facedFourBetOpportunity false (a different decision point — see the unit test above), hadFourBetOpportunityAfterThreeBetting true, foldedToFourBet false
+  const folder = analyzeHand(HAND_HERO_3BETS_FACES_4BET_FOLDS, 'Hero'); // hadFourBetOpportunityAfterThreeBetting true, foldedToFourBet true
+  const noFourBet = analyzeHand(HAND_HERO_MAKES_A_3BET, 'Hero'); // hero 3-bets, nobody re-raises — must not count in either 4-bet denominator
+  const stats = aggregateStats([raiser, caller, folder, noFourBet]);
+  // Only the raiser hand ever put hero in the "facing exactly two prior
+  // raises, could make the 4-bet themselves" spot — the caller and folder
+  // hands instead had hero's OWN 3-bet re-raised, a different decision
+  // point entirely (the Fold to 4-Bet denominator, checked separately below).
+  assert.strictEqual(stats.fourBetOppCount, 1);
+  assert.strictEqual(stats.fourBet, 100, '1 of 1 real opportunity taken');
+  assert.strictEqual(stats.foldToFourBetOppCount, 2, 'only the caller and the folder had their OWN 3-bet specifically re-raised');
+  assert.strictEqual(stats.foldToFourBet, 50, '1 of 2 real opportunities, not 1 of 4 hands');
 });
 
 test('aggregateStats: RFI%, Cold Call%, and Limp% use the right denominators', () => {
