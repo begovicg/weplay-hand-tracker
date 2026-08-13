@@ -187,6 +187,16 @@ function analyzeHand(block, heroNameOverride) {
   let facedFourBetAfterThreeBetting = false; // true only between "hero's 3-bet got re-raised" and hero's next action
   let hadFourBetOpportunityAfterThreeBetting = false; // hero's OWN 3-bet specifically got re-raised at some point
   let foldedToFourBet = false;
+  // Squeeze: a 3-bet made with at least one live caller sitting between the
+  // original raiser and hero — i.e. re-raising into a raise-plus-call(s),
+  // not just a heads-up raise. callersSinceLastRaise counts preflop calls
+  // by ANY player since the most recent preflop raise by anyone, reset to 0
+  // every time a new raise occurs (see the raise handler below) — so at the
+  // moment hero faces a single prior raise, this value is exactly "how many
+  // players called that raise before the action reached hero."
+  let callersSinceLastRaise = 0;
+  let squeezeOpportunity = false; // facing a raise with >=1 caller in between, at least once (any response counts)
+  let squeeze = false; // ...and hero re-raised
   // RFI (Raised First In): distinct from PFR, which counts every preflop
   // raise (opens, isolates, 3-bets, 4-bets+). RFI isolates just "hero was
   // the first player to voluntarily put money in the pot" — the number that
@@ -290,7 +300,10 @@ function analyzeHand(block, heroNameOverride) {
         // of what hero does about it — folding counts the same as calling or
         // re-raising, so this has to be checked on every one of hero's
         // preflop actions, not just the raises.
-        if (street === 'PREFLOP' && preflopRaiseCount === 1) facedThreeBetOpportunity = true;
+        if (street === 'PREFLOP' && preflopRaiseCount === 1) {
+          facedThreeBetOpportunity = true;
+          if (callersSinceLastRaise >= 1) squeezeOpportunity = true;
+        }
         if (street === 'PREFLOP' && preflopRaiseCount === 2) facedFourBetOpportunity = true;
         inHandThisFar = false;
         if (street === 'PREFLOP') { heroLastPreflopAction = { type: 'fold', level: preflopRaiseCount }; }
@@ -312,6 +325,7 @@ function analyzeHand(block, heroNameOverride) {
         noteHeroFirstPreflopDecision();
         if (street === 'PREFLOP' && preflopRaiseCount === 1) {
           facedThreeBetOpportunity = true;
+          if (callersSinceLastRaise >= 1) squeezeOpportunity = true;
           // Cold call: calling the opening raise with zero money already
           // invested (see coldCallOpportunity's declaration for why).
           if (contributed === 0) { coldCallOpportunity = true; coldCall = true; }
@@ -325,9 +339,11 @@ function analyzeHand(block, heroNameOverride) {
         if (street === 'PREFLOP' && facedFourBetAfterThreeBetting) facedFourBetAfterThreeBetting = false; // called it, didn't fold
       }
       // Tracks whether ANY player (not just hero) has voluntarily entered
-      // the pot yet — feeds RFI opportunity detection above, so this has to
-      // fire regardless of who made the call.
-      if (street === 'PREFLOP') anyVoluntaryPreflopAction = true;
+      // the pot yet — feeds RFI opportunity detection above — and, since
+      // the most recent raise, how many players have called it — feeds
+      // squeeze detection above. Both have to fire regardless of who made
+      // the call.
+      if (street === 'PREFLOP') { anyVoluntaryPreflopAction = true; callersSinceLastRaise++; }
       continue;
     }
     if ((m = RE_BET.exec(l))) {
@@ -347,7 +363,11 @@ function analyzeHand(block, heroNameOverride) {
         // unopened pot — exactly RFI (as opposed to PFR generally, which
         // also counts isolates/3-bets/4-bets over an already-opened pot).
         if (noteHeroFirstPreflopDecision()) rfi = true;
-        if (street === 'PREFLOP' && preflopRaiseCount === 1) { facedThreeBetOpportunity = true; madeThreeBet = true; }
+        if (street === 'PREFLOP' && preflopRaiseCount === 1) {
+          facedThreeBetOpportunity = true;
+          madeThreeBet = true;
+          if (callersSinceLastRaise >= 1) { squeezeOpportunity = true; squeeze = true; }
+        }
         if (street === 'PREFLOP' && preflopRaiseCount === 2) { facedFourBetOpportunity = true; madeFourBet = true; }
         contributed += amt;
         if (street === 'PREFLOP') {
@@ -370,7 +390,7 @@ function analyzeHand(block, heroNameOverride) {
         facedFourBetAfterThreeBetting = true;
         hadFourBetOpportunityAfterThreeBetting = true;
       }
-      if (street === 'PREFLOP') { anyVoluntaryPreflopAction = true; preflopRaiseCount++; }
+      if (street === 'PREFLOP') { anyVoluntaryPreflopAction = true; preflopRaiseCount++; callersSinceLastRaise = 0; }
       continue;
     }
     if ((m = RE_UNCALLED.exec(l)) && m[2] === hero) { contributed -= parseFloat(m[1]); continue; }
@@ -404,6 +424,8 @@ function analyzeHand(block, heroNameOverride) {
     facedFourBetOpportunity,
     foldedToFourBet,
     hadFourBetOpportunityAfterThreeBetting,
+    squeeze,
+    squeezeOpportunity,
     handCategory: handCategoryFor(preflopRaiseCount, heroLastPreflopAction),
     sawFlop,
     reachedShowdown,
@@ -501,6 +523,13 @@ function aggregateStats(allHands) {
   const fourBetOppCount = nonBomb.filter((h) => h.facedFourBetOpportunity).length;
   const foldToFourBetCount = nonBomb.filter((h) => h.foldedToFourBet).length;
   const foldToFourBetOppCount = nonBomb.filter((h) => h.hadFourBetOpportunityAfterThreeBetting).length;
+
+  // Squeeze%: (times re-raised a raise that already had a live caller in
+  // front of hero) / (times faced that exact situation). A subset of the
+  // 3-bet opportunities above — same preflopRaiseCount === 1 spot, plus the
+  // extra "someone called in between" condition.
+  const squeezeCount = nonBomb.filter((h) => h.squeeze).length;
+  const squeezeOppCount = nonBomb.filter((h) => h.squeezeOpportunity).length;
 
   const sawFlopHands = allHands.filter((h) => h.sawFlop);
   // WTSD%: (times reached a genuine showdown) / (times saw the flop) —
@@ -645,6 +674,8 @@ function aggregateStats(allHands) {
     fourBetOppCount,
     foldToFourBet: pct(foldToFourBetCount, foldToFourBetOppCount),
     foldToFourBetOppCount,
+    squeeze: pct(squeezeCount, squeezeOppCount),
+    squeezeOppCount,
     wtsd: pct(wtsdHands.length, sawFlopHands.length),
     wonAtShowdown: pct(wonShowdownCount, wtsdHands.length),
     wonWhenSawFlop: pct(wonWhenSawFlopCount, sawFlopHands.length),

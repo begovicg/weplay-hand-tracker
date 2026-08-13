@@ -558,6 +558,65 @@ Seat 1: PlayerA (small blind) folded before Flop
 Seat 2: Hero (big blind) folded before Flop
 Seat 3: PlayerC collected ($25.75)`;
 
+// A squeeze: PlayerA raises, PlayerB calls (a live caller in between), and
+// hero re-raises over both of them.
+const HAND_SQUEEZE = `Weplay Hand #908:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:08:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($100 in chips)
+Seat 2: PlayerB ($100 in chips)
+Seat 3: PlayerC ($100 in chips)
+Seat 4: Hero ($100 in chips)
+PlayerC: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Ad]
+PlayerA: raises $1.5 to $1.5
+PlayerB: calls $1.5
+PlayerC: folds
+Hero: raises $8 to $8
+PlayerA: folds
+PlayerB: folds
+Uncalled bet ($6.5) returned to Hero
+*** SHOW DOWN ***
+Hero collected $3.75 from pot
+*** SUMMARY ***
+Total pot $3.75 | Rake $0
+Seat 1: PlayerA folded before Flop
+Seat 2: PlayerB folded before Flop
+Seat 3: PlayerC (small blind) folded before Flop
+Seat 4: Hero (big blind) collected ($3.75)`;
+
+// The same squeeze setup (a raise plus a live caller), but hero just calls
+// instead of re-raising — a squeeze opportunity, declined.
+const HAND_SQUEEZE_OPPORTUNITY_DECLINED = `Weplay Hand #909:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:09:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($100 in chips)
+Seat 2: PlayerB ($100 in chips)
+Seat 3: PlayerC ($100 in chips)
+Seat 4: Hero ($100 in chips)
+PlayerC: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [7c 7d]
+PlayerA: raises $1.5 to $1.5
+PlayerB: calls $1.5
+PlayerC: folds
+Hero: calls $1
+*** FLOP *** [2c 7h 9s]
+Hero: checks
+PlayerA: bets $3
+PlayerB: folds
+Hero: folds
+Uncalled bet ($3) returned to PlayerA
+*** SHOW DOWN ***
+PlayerA collected $5.5 from pot
+*** SUMMARY ***
+Total pot $5.5 | Rake $0
+Seat 1: PlayerA collected ($5.5)
+Seat 2: PlayerB folded on the Flop
+Seat 3: PlayerC (small blind) folded before Flop
+Seat 4: Hero (big blind) folded on the Flop`;
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 test('checking as BB with no raise is NOT voluntary — VPIP stays false', () => {
@@ -600,6 +659,23 @@ test('Hero makes a 3-bet of their own (re-raises an existing raise)', () => {
   assert.strictEqual(r.facedThreeBetOpportunity, true, 'facing a single raise and re-raising it is itself an opportunity taken');
   assert.strictEqual(r.rfiOpportunity, false, 'PlayerC had already raised before hero acted — the pot was not unopened');
   assert.strictEqual(r.rfi, false, 'a 3-bet is real PFR, but not RFI');
+  assert.strictEqual(r.squeezeOpportunity, false, 'heads-up 3-bet — nobody called PlayerC\'s raise before hero acted');
+  assert.strictEqual(r.squeeze, false);
+});
+
+test('squeeze: re-raising a raise that already had a live caller in front of hero', () => {
+  const r = analyzeHand(HAND_SQUEEZE, 'Hero');
+  assert.strictEqual(r.threeBet, true, 'still a 3-bet by raise level');
+  assert.strictEqual(r.squeezeOpportunity, true, 'PlayerB called PlayerA\'s raise before hero acted');
+  assert.strictEqual(r.squeeze, true);
+});
+
+test('squeeze opportunity declined: same raise-plus-caller setup, but hero just calls', () => {
+  const r = analyzeHand(HAND_SQUEEZE_OPPORTUNITY_DECLINED, 'Hero');
+  assert.strictEqual(r.threeBet, false, 'hero called, did not re-raise');
+  assert.strictEqual(r.facedThreeBetOpportunity, true, 'still faced exactly one prior raise');
+  assert.strictEqual(r.squeezeOpportunity, true, 'PlayerB had called in front of hero');
+  assert.strictEqual(r.squeeze, false, 'the opportunity existed but was not taken');
 });
 
 test('RFI opportunity declined by folding — hero was first to act with the pot unopened but folded', () => {
@@ -751,6 +827,15 @@ test('aggregateStats: 4-Bet% and Fold to 4-Bet% use the real opportunity counts,
   assert.strictEqual(stats.fourBet, 100, '1 of 1 real opportunity taken');
   assert.strictEqual(stats.foldToFourBetOppCount, 2, 'only the caller and the folder had their OWN 3-bet specifically re-raised');
   assert.strictEqual(stats.foldToFourBet, 50, '1 of 2 real opportunities, not 1 of 4 hands');
+});
+
+test('aggregateStats: Squeeze% only counts real raise-plus-caller opportunities, not every 3-bet spot', () => {
+  const squeezed = analyzeHand(HAND_SQUEEZE, 'Hero'); // squeeze true, squeezeOpportunity true
+  const declined = analyzeHand(HAND_SQUEEZE_OPPORTUNITY_DECLINED, 'Hero'); // squeeze false, squeezeOpportunity true
+  const headsUpThreeBet = analyzeHand(HAND_HERO_MAKES_A_3BET, 'Hero'); // a real 3-bet, but no caller in between — must NOT count as a squeeze opportunity
+  const stats = aggregateStats([squeezed, declined, headsUpThreeBet]);
+  assert.strictEqual(stats.squeezeOppCount, 2, 'only the two raise-plus-caller hands count — the heads-up 3-bet never had a caller in between');
+  assert.strictEqual(stats.squeeze, 50, '1 of 2 real opportunities taken');
 });
 
 test('aggregateStats: RFI%, Cold Call%, and Limp% use the right denominators', () => {
