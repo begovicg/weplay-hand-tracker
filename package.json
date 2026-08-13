@@ -10,12 +10,14 @@
   },
   "scripts": {
     "start": "electron .",
+    "dev": "set NODE_ENV=development && electron .",
     "test": "node test/converter.test.js && node test/stats.test.js && node test/zipReader.test.js && node test/handStore.test.js && node test/handReplay.test.js && node test/handEvaluator.test.js && node test/equity.test.js && node test/evAnalysis.test.js && node test/chartMath.test.js",
     "dist": "electron-builder --win"
   },
   "devDependencies": {
     "electron": "^38.0.0",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "electron-reloader": "^1.2.3"
   },
   "build": {
     "appId": "com.petitblaireau.weplayhandtracker",
@@ -34,7 +36,12 @@
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "icon": "build/icon.ico"
     },

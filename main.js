@@ -18,6 +18,13 @@ const { buildHandReplay } = require('./src/handReplay');
 const { analyzeHand, aggregateStats } = require('./src/stats');
 const { splitHands } = require('./src/converter');
 
+// Auto-reload during development
+if (process.env.NODE_ENV !== 'production') {
+  try {
+    require('electron-reloader')(module);
+  } catch (_) { /* electron-reloader not available */ }
+}
+
 let mainWindow;
 const handWindows = new Map(); // "handId::perspectivePlayer" -> BrowserWindow, so re-clicking the same hand (from the same perspective) focuses instead of duplicating
 
@@ -170,7 +177,9 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
