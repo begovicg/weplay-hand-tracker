@@ -1072,6 +1072,21 @@ test('aggregateStats excludes bomb pot hands from VPIP/PFR/position denominators
   assert.strictEqual(stats.vpip, 0, 'VPIP% denominator should be the 1 non-bomb hand only, not 2');
 });
 
+test('aggregateStats excludes bomb pot hands from WTSD/W$SD/WWSF denominators too', () => {
+  const hands = [
+    // Non-bomb: saw flop, reached a real showdown, won it.
+    { bb: 0.5, net: 5, vpip: true, pfr: true, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, reachedShowdown: true, wonAtShowdown: true, wonWhenSawFlop: true, postflopAggressive: 1, postflopCalls: 0, isBombPot: false, position: 'BTN' },
+    // Bomb pot: also saw flop, reached showdown, and won — but a forced
+    // multiway pot everyone antes into isn't a fair comparison for a
+    // postflop-skill rate, so none of this should count toward WTSD/WWSF.
+    { bb: 0.5, net: 8, vpip: false, pfr: false, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, reachedShowdown: true, wonAtShowdown: true, wonWhenSawFlop: true, postflopAggressive: 1, postflopCalls: 0, isBombPot: true, position: null },
+  ];
+  const stats = aggregateStats(hands);
+  assert.strictEqual(stats.wtsd, 100, 'WTSD should be 1/1 non-bomb hands, not 2/2 with the bomb pot mixed in');
+  assert.strictEqual(stats.wonAtShowdown, 100, 'W$SD denominator should also exclude the bomb pot');
+  assert.strictEqual(stats.wonWhenSawFlop, 100, 'WWSF denominator should also exclude the bomb pot');
+});
+
 test('a hand with no resolution anywhere is excluded (returns null), matching the converter\'s own skip condition', () => {
   const r = analyzeHand(HAND_NO_RESOLUTION, 'Hero');
   assert.strictEqual(r, null, 'a hand with no collected-from-pot line anywhere cannot be attributed a result');
@@ -1526,9 +1541,15 @@ test('aggregateStats: per-street aggression matches PokerTracker\'s documented A
   // the check is tracked on the hand but excluded from this ratio.
   assert.strictEqual(stats.flopAggression, 50);
   assert.strictEqual(stats.flopAggressionOpportunities, 4);
+  // Agg% (DriveHUD's convention): same agg=2, but the check now counts
+  // toward the denominator -> 2 / (2+1+1+1) = 40%, over 5 opportunities.
+  assert.strictEqual(stats.flopAggPct, 40);
+  assert.strictEqual(stats.flopAggPctOpportunities, 5);
   // Turn/river had zero opportunities anywhere in this fixture.
   assert.strictEqual(stats.turnAggression, null);
   assert.strictEqual(stats.turnAggressionOpportunities, 0);
+  assert.strictEqual(stats.turnAggPct, null);
+  assert.strictEqual(stats.turnAggPctOpportunities, 0);
 });
 
 test('analyzeHand: streetAgg is correctly populated from real hand text — a flop check is tracked in the raw counts even though AFq excludes it from the aggregation denominator', () => {

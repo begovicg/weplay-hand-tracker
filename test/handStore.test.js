@@ -375,6 +375,84 @@ test('queryHands: "Went to showdown" filter is three-way (shown / not-shown / bo
   assert.strictEqual(both.total, 2, 'no wentToShowdown filter (or any other value) should return everything');
 });
 
+// A genuine 2-way showdown where the LOSER mucks instead of showing — very
+// common (no reason to reveal a losing hand). PlayerB reaches a real
+// showdown here (checks the flop, stays in through SHOW DOWN) but has no
+// "shows" line of their own, only "mucks hand".
+const HAND_SHOWDOWN_MUCKED_LOSER = `Weplay Hand #302:  Hold'em No Limit ($0.5/$1) - 2026/07/08 12:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: PlayerB ($100 in chips)
+Hero: posts small blind $0.5
+PlayerB: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [Ah Ad]
+Hero: raises $19 to $19.5
+PlayerB: calls $18.5
+*** FLOP *** [2c 7d 9s]
+PlayerB: checks
+Hero: checks
+*** SHOW DOWN ***
+Hero: shows [Ah Ad] (One Pair)
+PlayerB: mucks hand
+Hero collected $40 from pot
+*** SUMMARY ***
+Total pot $40 | Rake $0
+Board [2c 7d 9s]
+Seat 1: Hero (small blind) showed [Ah Ad] and won ($40) with One Pair
+Seat 2: PlayerB (big blind) mucked`;
+
+test('queryHands: "Went to showdown" filter counts a genuine showdown reached even when the loser mucks instead of showing — not just literal `shows` lines', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_SHOWDOWN_MUCKED_LOSER, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  // From PlayerB's own perspective: they never have a `shows` line, but they
+  // genuinely stayed in through a real 2-way showdown — "Showdown: Yes"
+  // should find them, and "Showdown: No" must NOT (the bug this regression
+  // guards: the old definition only checked for a literal `shows` line,
+  // which silently missed every mucked-loser showdown like this one).
+  const shown = queryHands(db, { perspectivePlayer: 'PlayerB', wentToShowdown: 'shown' });
+  assert.strictEqual(shown.total, 1, 'PlayerB genuinely reached showdown, even without a shows line');
+
+  const notShown = queryHands(db, { perspectivePlayer: 'PlayerB', wentToShowdown: 'not-shown' });
+  assert.strictEqual(notShown.total, 0, 'a mucked-at-showdown loss must not be miscounted as "never went to showdown"');
+});
+
+const HAND_BOMB_POT = `Weplay Hand #303:  Hold'em No Limit ($0.25/$0.50) - 2026/07/08 13:00:00 UTC
+Table 'Bomb Pot'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts the ante $1.5
+Hero: posts the ante $1.5
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+*** FLOP *** [Ah Kh Qh]
+Hero: checks
+PlayerA: checks
+*** SHOW DOWN ***
+PlayerA: shows [Jh Th] (a straight flush)
+Hero: mucks hand
+PlayerA collected $3 from pot
+*** SUMMARY ***
+Total pot $3 | Rake $0
+Seat 1: PlayerA showed [Jh Th] and won ($3) with a straight flush
+Seat 2: Hero mucked`;
+
+test('queryHands: "Include Bomb Pots" toggle excludes bomb pot hands everywhere it applies (table/stats/graph/export all share this same query)', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_BOMB_POT}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const withBombPots = queryHands(db, {});
+  assert.strictEqual(withBombPots.total, 2, 'default (no includeBombPots key, matching the checked checkbox) includes everything');
+
+  const withoutBombPots = queryHands(db, { includeBombPots: false });
+  assert.strictEqual(withoutBombPots.total, 1, 'unchecked excludes the bomb pot hand specifically');
+  assert.strictEqual(withoutBombPots.hands[0].handId, '100', 'the remaining hand is the non-bomb-pot one');
+
+  const rawRows = queryRawHandsForStats(db, { includeBombPots: false });
+  assert.strictEqual(rawRows.length, 1, 'queryRawHandsForStats (stats/graph/export) shares the same WHERE clause, so it is excluded there too');
+});
+
 test('queryHands: pot size filter, in big blinds, converts against each hand\'s own bb_stake', () => {
   const { db } = tmpDb();
   // HAND_SHOWN: 40bb pot. HAND_NOT_SHOWN: 3bb pot.

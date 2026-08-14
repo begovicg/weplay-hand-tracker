@@ -711,15 +711,29 @@ function aggregateStats(allHands) {
   const foldToStealCount = nonBomb.filter((h) => h.foldedToSteal).length;
   const foldToStealOppCount = nonBomb.filter((h) => h.stealDefenseOpportunity).length;
 
+  // sawFlopPct (below) deliberately stays on allHands — "how often do you
+  // see a flop at all" is a fair question to ask across everything you're
+  // dealt, bomb pots included. WTSD/W$SD/WWSF are different: each is a
+  // postflop *rate* (of the flops you saw, how often did X happen), and a
+  // bomb pot forces every seated player to post and see the flop together
+  // regardless of hand strength — much more multiway than a hand you
+  // actually chose to continue with, and structurally that alone lowers a
+  // per-player win rate no matter how well postflop is played. Confirmed
+  // against real data: WWSF over non-bomb hands alone is 48.6% (squarely in
+  // the normal 45-50% range), but blending in bomb pots — where a forced
+  // 6-8-way pot can only have one winner — drags the combined figure down
+  // to 41.7%, a bomb-pot-only WWSF as low as 15.7%. Same dilution hits
+  // WTSD. Matches the same reasoning VPIP/PFR/3-Bet above already apply.
   const sawFlopHands = allHands.filter((h) => h.sawFlop);
+  const sawFlopNonBomb = nonBomb.filter((h) => h.sawFlop);
   // WTSD%: (times reached a genuine showdown) / (times saw the flop) —
   // PokerTracker's own convention. This was also a bug here — it divided by
   // every hand dealt instead of just the ones that saw a flop, which made
   // the rate look far lower than it really was (most hands never see a flop
   // at all, so they were never real showdown candidates to begin with).
-  const wtsdHands = allHands.filter((h) => h.reachedShowdown);
-  const wonShowdownCount = allHands.filter((h) => h.wonAtShowdown).length;
-  const wonWhenSawFlopCount = sawFlopHands.filter((h) => h.wonWhenSawFlop).length;
+  const wtsdHands = sawFlopNonBomb.filter((h) => h.reachedShowdown);
+  const wonShowdownCount = nonBomb.filter((h) => h.wonAtShowdown).length;
+  const wonWhenSawFlopCount = sawFlopNonBomb.filter((h) => h.wonWhenSawFlop).length;
 
   const totalAggressive = sum(allHands, (h) => h.postflopAggressive);
   const totalPostflopCalls = sum(allHands, (h) => h.postflopCalls);
@@ -733,16 +747,32 @@ function aggregateStats(allHands) {
   // reached that street (a hand that folded preflop contributes zero to
   // every street's numbers, exactly as it should — it never had a flop
   // decision to be aggressive or passive about).
+  // Agg% (DriveHUD's convention) alongside AFq — same underlying counts,
+  // checks included in the denominator instead of excluded. Reported
+  // side by side rather than picking one: AFq is what PokerTracker itself
+  // documents and is the more consistently cited convention (see AFq's own
+  // comment above), but checks-excluded-vs-included is purely a denominator
+  // choice, not a correctness question, and the gap between the two for the
+  // same actions is large enough (confirmed against real data: a real
+  // batch's flop AFq of ~50% is the same underlying play as a ~26% Agg%)
+  // that seeing both is more useful than silently picking a side.
   function streetAggPct(streetKey) {
-    let agg = 0, calls = 0, folds = 0;
+    let agg = 0, calls = 0, folds = 0, checks = 0;
     for (const h of allHands) {
       if (!h.streetAgg) continue;
       agg += h.streetAgg[streetKey].agg;
       calls += h.streetAgg[streetKey].calls;
       folds += h.streetAgg[streetKey].folds;
+      checks += h.streetAgg[streetKey].checks;
     }
     const opportunities = agg + calls + folds;
-    return { pct: opportunities > 0 ? (agg / opportunities) * 100 : null, opportunities };
+    const aggPctOpportunities = opportunities + checks;
+    return {
+      pct: opportunities > 0 ? (agg / opportunities) * 100 : null,
+      opportunities,
+      aggPct: aggPctOpportunities > 0 ? (agg / aggPctOpportunities) * 100 : null,
+      aggPctOpportunities,
+    };
   }
   const flopAgg = streetAggPct('FLOP');
   const turnAgg = streetAggPct('TURN');
@@ -918,17 +948,23 @@ function aggregateStats(allHands) {
     stealOppCount,
     foldToSteal: pct(foldToStealCount, foldToStealOppCount),
     foldToStealOppCount,
-    wtsd: pct(wtsdHands.length, sawFlopHands.length),
+    wtsd: pct(wtsdHands.length, sawFlopNonBomb.length),
     wonAtShowdown: pct(wonShowdownCount, wtsdHands.length),
-    wonWhenSawFlop: pct(wonWhenSawFlopCount, sawFlopHands.length),
+    wonWhenSawFlop: pct(wonWhenSawFlopCount, sawFlopNonBomb.length),
     sawFlopPct: pct(sawFlopHands.length, n),
     aggressionFactor: totalPostflopCalls > 0 ? totalAggressive / totalPostflopCalls : null,
     flopAggression: flopAgg.pct,
     flopAggressionOpportunities: flopAgg.opportunities,
+    flopAggPct: flopAgg.aggPct,
+    flopAggPctOpportunities: flopAgg.aggPctOpportunities,
     turnAggression: turnAgg.pct,
     turnAggressionOpportunities: turnAgg.opportunities,
+    turnAggPct: turnAgg.aggPct,
+    turnAggPctOpportunities: turnAgg.aggPctOpportunities,
     riverAggression: riverAgg.pct,
     riverAggressionOpportunities: riverAgg.opportunities,
+    riverAggPct: riverAgg.aggPct,
+    riverAggPctOpportunities: riverAgg.aggPctOpportunities,
     flopCheckRaise: flopCR.pct,
     flopCheckRaiseOpportunities: flopCR.opportunities,
     turnCheckRaise: turnCR.pct,

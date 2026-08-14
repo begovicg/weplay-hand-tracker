@@ -29,6 +29,21 @@ const statsCards = document.getElementById('statsCards');
 const statsChartWrap = document.getElementById('statsChartWrap');
 const statsChart = document.getElementById('statsChart');
 const statsCaveat = document.getElementById('statsCaveat');
+const appFooter = document.getElementById('appFooter');
+
+// Keeps main's bottom padding (--footer-space, see style.css) matched to
+// the fixed footer's actual rendered height, whatever that happens to be —
+// the caveat text's length varies (grows as more stats get their own
+// explanatory sentence, shrinks to empty on the no-hands-matched screen),
+// and a ResizeObserver reacts to every cause of that height changing
+// (text content, window width reflowing the wrapped lines, font load)
+// without needing to hook each individual call site that touches
+// statsCaveat.textContent.
+function syncFooterSpace() {
+  document.documentElement.style.setProperty('--footer-space', `${appFooter.offsetHeight + 14}px`);
+}
+new ResizeObserver(syncFooterSpace).observe(appFooter);
+syncFooterSpace();
 const loadingOverlay = document.getElementById('loadingOverlay');
 const loadingText = document.getElementById('loadingText');
 const bootOverlay = document.getElementById('bootOverlay');
@@ -62,8 +77,39 @@ const filterWtsd = document.getElementById('filterWtsd');
 const filterSawFlop = document.getElementById('filterSawFlop');
 const filterPotBbMin = document.getElementById('filterPotBbMin');
 const filterPotBbMax = document.getElementById('filterPotBbMax');
+const filterIncludeBombPots = document.getElementById('filterIncludeBombPots');
 const filterSearch = document.getElementById('filterSearch');
+const searchToggleBtn = document.getElementById('searchToggleBtn');
+const searchPopup = document.getElementById('searchPopup');
+const advancedFiltersToggle = document.getElementById('advancedFiltersToggle');
+const advancedFiltersPanel = document.getElementById('advancedFiltersPanel');
 const filterResetBtn = document.getElementById('filterResetBtn');
+
+// Advanced Filters — the "Common Filters" / "Actions and Opportunities" set
+// PokerTracker/Hold'em Manager/Hand2Note all treat as standard (see
+// src/handStore.js buildWhereClause for the matching backend side). Listed
+// once here as [filterKey, elementId] pairs rather than hand-declared three
+// separate times over (element refs, currentFilters(), reset) the way the
+// much shorter main filters-bar list above does — with 28 of these, a typo
+// in one of three places would silently desync a filter from its control.
+const ADVANCED_FILTER_FIELDS = [
+  ['vpip', 'filterVpip'], ['pfr', 'filterPfr'], ['rfi', 'filterRfi'],
+  ['coldCall', 'filterColdCall'], ['limped', 'filterLimped'],
+  ['threeBet', 'filterThreeBet'], ['foldedToThreeBet', 'filterFoldedToThreeBet'],
+  ['fourBet', 'filterFourBet'], ['foldedToFourBet', 'filterFoldedToFourBet'],
+  ['squeeze', 'filterSqueeze'], ['attemptSteal', 'filterAttemptSteal'],
+  ['foldedToSteal', 'filterFoldedToSteal'],
+  ['cbetFlop', 'filterCbetFlop'], ['cbetTurn', 'filterCbetTurn'], ['cbetRiver', 'filterCbetRiver'],
+  ['foldedToCbetFlop', 'filterFoldedToCbetFlop'], ['foldedToCbetTurn', 'filterFoldedToCbetTurn'], ['foldedToCbetRiver', 'filterFoldedToCbetRiver'],
+  ['checkRaiseFlop', 'filterCheckRaiseFlop'], ['checkRaiseTurn', 'filterCheckRaiseTurn'], ['checkRaiseRiver', 'filterCheckRaiseRiver'],
+  ['wonAtShowdown', 'filterWonAtShowdown'], ['wonWhenSawFlop', 'filterWonWhenSawFlop'],
+  ['runItTwice', 'filterRunItTwice'],
+  ['stackBbMin', 'filterStackBbMin'], ['stackBbMax', 'filterStackBbMax'],
+  ['stakesBbMin', 'filterStakesBbMin'], ['stakesBbMax', 'filterStakesBbMax'],
+];
+const advancedFilterEls = Object.fromEntries(
+  ADVANCED_FILTER_FIELDS.map(([key, id]) => [key, document.getElementById(id)]),
+);
 const handsPrevBtn = document.getElementById('handsPrevBtn');
 const handsNextBtn = document.getElementById('handsNextBtn');
 const handsPageLabel = document.getElementById('handsPageLabel');
@@ -522,7 +568,7 @@ let externalFilters = {};
 const mainState = { loaded: false };
 
 function currentFilters() {
-  return {
+  const filters = {
     perspectivePlayer: filterPlayer.value || undefined,
     dateFrom: filterDateFrom.value || undefined,
     dateTo: filterDateTo.value || undefined,
@@ -534,8 +580,14 @@ function currentFilters() {
     sawFlop: filterSawFlop.value || undefined,
     potBbMin: filterPotBbMin.value || undefined,
     potBbMax: filterPotBbMax.value || undefined,
+    // Only ever sent as an explicit `false` — omitted (undefined) for
+    // "Yes", matching every other filter's "no filter applied" shape,
+    // since "Yes" is "include everything," the same as not filtering at all.
+    includeBombPots: filterIncludeBombPots.value === 'no' ? false : undefined,
     search: filterSearch.value.trim() || undefined,
   };
+  for (const [key, el] of Object.entries(advancedFilterEls)) filters[key] = el.value || undefined;
+  return filters;
 }
 
 // "6max-ante" -> "6-max (Ante)", "8max-bombpot" -> "8-max (Bomb Pot)" — built
@@ -688,11 +740,12 @@ function renderStats(payload) {
   }
 
   const caveatParts = [];
-  caveatParts.push('VPIP, PFR, 3-Bet, and Fold to 3-Bet are all computed over non-bomb-pot hands only — a bomb pot has no preflop betting round, so including it would silently deflate every one of those rates.');
+  caveatParts.push('VPIP, PFR, 3-Bet, and Fold to 3-Bet are all computed over non-bomb-pot hands only — a bomb pot has no preflop betting round, so including it would silently deflate every one of those rates. WTSD, W$SD, and WWSF are also non-bomb-pot only — a bomb pot forces every seated player to see the flop together regardless of hand strength, which structurally lowers a per-player win rate no matter how well postflop is played.');
   if (excludedCount > 0) {
     caveatParts.push(`${excludedCount} hand(s) were excluded entirely — no cards could be attributed to a player, or the hand had no resolution anywhere in the source (a real Weplay data gap, e.g. a disconnect at showdown that was never resolved).`);
   }
   caveatParts.push('WTSD only counts a genuine multi-way contest (2+ players still active when the showdown is reached) — Weplay shows the same header text even for an uncontested fold-out, which is excluded here.');
+  caveatParts.push('AFq and Agg% measure the exact same bets/raises on each street, just over a different denominator — AFq (PokerTracker\'s convention) counts only bets, raises, calls, and folds, while Agg% (DriveHUD\'s convention) also counts checks. Checking is common, so Agg%\'s denominator — and therefore its percentage — is usually much lower than AFq\'s for the same underlying hands; neither one is "more correct," they\'re just answering slightly different questions.');
   caveatParts.push('EV Winrate only adjusts genuine 2-player all-in-with-cards-to-come hands (both hands shown at showdown) — multi-way all-ins keep their actual result for now, since that needs separate per-opponent side-pot equity math. Equity is computed exactly for turn/river all-ins, and via Monte Carlo sampling (10,000 trials, ~0.4 percentage points of statistical noise) for preflop/flop all-ins, where exact enumeration would mean up to ~1.7 million board combinations per hand.');
   statsCaveat.textContent = caveatParts.join(' ');
 }
@@ -763,9 +816,18 @@ function renderHudTable(stats) {
       title: 'Aggression & Showdown',
       rows: [
         hudRow('Aggression Factor', stats.aggressionFactor != null ? stats.aggressionFactor.toFixed(2) : '—', null, 'neutral'),
-        hudRow('Flop Aggression', fmtPct(stats.flopAggression), stats.flopAggressionOpportunities, 'pos'),
-        hudRow('Turn Aggression', fmtPct(stats.turnAggression), stats.turnAggressionOpportunities, 'pos'),
-        hudRow('River Aggression', fmtPct(stats.riverAggression), stats.riverAggressionOpportunities, 'pos'),
+        // AFq (PokerTracker's convention: checks excluded from the
+        // denominator) grouped together, then Agg% (DriveHUD's convention:
+        // checks included) grouped together — same underlying actions, two
+        // different denominators. See the caveat text below the graph for
+        // the full explanation, and streetAggPct in src/stats.js for why
+        // both are shown rather than picking one.
+        hudRow('Flop AFq', fmtPct(stats.flopAggression), stats.flopAggressionOpportunities, 'pos'),
+        hudRow('Turn AFq', fmtPct(stats.turnAggression), stats.turnAggressionOpportunities, 'pos'),
+        hudRow('River AFq', fmtPct(stats.riverAggression), stats.riverAggressionOpportunities, 'pos'),
+        hudRow('Flop Agg%', fmtPct(stats.flopAggPct), stats.flopAggPctOpportunities, 'pos'),
+        hudRow('Turn Agg%', fmtPct(stats.turnAggPct), stats.turnAggPctOpportunities, 'pos'),
+        hudRow('River Agg%', fmtPct(stats.riverAggPct), stats.riverAggPctOpportunities, 'pos'),
         hudRow('WTSD', fmtPct(stats.wtsd), null, 'neutral'),
         hudRow('W$SD', fmtPct(stats.wonAtShowdown), null, 'neutral'),
         hudRow('W$WSF', fmtPct(stats.wonWhenSawFlop), null, 'neutral'),
@@ -807,8 +869,12 @@ function buildTimelineChartSvg(timeline) {
   const points = timeline.map((t, i) => `${xFor(i).toFixed(1)},${yFor(t.cumulative).toFixed(1)}`).join(' ');
   const areaPoints = `${padL},${zeroY} ${points} ${xFor(timeline.length - 1).toFixed(1)},${zeroY}`;
 
-  const last = timeline[timeline.length - 1];
-  const lineColor = last.cumulative >= 0 ? 'var(--ok)' : 'var(--danger)';
+  // Always green, win or lose — matches the Advanced Graph's own "Total
+  // Profit" line (src/renderer.js's buildAdvancedTimelineChartSvg), which
+  // is fixed-color regardless of sign too. Red is reserved for the
+  // no-showdown line specifically, not for "currently down" — this isn't a
+  // stock ticker where red/green track the sign of the number.
+  const lineColor = 'var(--ok)';
 
   const firstLabel = timeline[0].date;
   const lastLabel = timeline[timeline.length - 1].date;
@@ -1079,7 +1145,7 @@ function renderHandsRows(hands) {
     const td = document.createElement('td');
     td.colSpan = HANDS_COLUMNS.length;
     td.className = 'hands-table-empty';
-    td.textContent = 'No hands match these filters — try Reset filters, or import some under Import Hands.';
+    td.textContent = 'No hands match these filters — try Reset filters, or import some under Import/Export Hands.';
     tr.appendChild(td);
     handsTableBody.appendChild(tr);
     return;
@@ -1307,9 +1373,41 @@ restoreBtn.addEventListener('click', async () => {
   }
 });
 
-for (const el of [filterPlayer, filterDateFrom, filterDateTo, filterTableCategory, filterStakes, filterPosition, filterHandCategory, filterWtsd, filterSawFlop, filterPotBbMin, filterPotBbMax]) {
+for (const el of [filterPlayer, filterDateFrom, filterDateTo, filterTableCategory, filterStakes, filterPosition, filterHandCategory, filterWtsd, filterSawFlop, filterPotBbMin, filterPotBbMax, filterIncludeBombPots, ...Object.values(advancedFilterEls)]) {
   el.addEventListener('change', () => refreshEverything({ resetPage: true }));
 }
+
+advancedFiltersToggle.addEventListener('click', () => {
+  const expanded = advancedFiltersToggle.getAttribute('aria-expanded') === 'true';
+  advancedFiltersToggle.setAttribute('aria-expanded', String(!expanded));
+  advancedFiltersToggle.textContent = expanded ? 'Filters ▾' : 'Filters ▴';
+  advancedFiltersPanel.classList.toggle('hidden', expanded);
+});
+
+searchToggleBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const opening = searchPopup.classList.contains('hidden');
+  searchPopup.classList.toggle('hidden', !opening);
+  searchToggleBtn.setAttribute('aria-expanded', String(opening));
+  if (opening) filterSearch.focus();
+});
+
+// Closes on outside click and Escape, same as any other transient popover —
+// left open otherwise, it'd sit on top of the filters bar indefinitely.
+document.addEventListener('click', (e) => {
+  if (searchPopup.classList.contains('hidden')) return;
+  if (searchPopup.contains(e.target) || e.target === searchToggleBtn) return;
+  searchPopup.classList.add('hidden');
+  searchToggleBtn.setAttribute('aria-expanded', 'false');
+});
+
+filterSearch.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    searchPopup.classList.add('hidden');
+    searchToggleBtn.setAttribute('aria-expanded', 'false');
+    searchToggleBtn.focus();
+  }
+});
 
 let searchDebounceTimer = null;
 filterSearch.addEventListener('input', () => {
@@ -1328,7 +1426,9 @@ filterResetBtn.addEventListener('click', () => {
   filterSawFlop.value = '';
   filterPotBbMin.value = '';
   filterPotBbMax.value = '';
+  filterIncludeBombPots.value = 'yes';
   filterSearch.value = '';
+  for (const el of Object.values(advancedFilterEls)) el.value = '';
   // Player perspective is deliberately NOT reset — clearing it would blend
   // multiple heroes' results together if more than one exists in the
   // database, which is never what "reset filters" should silently do.

@@ -55,21 +55,45 @@ CREATE INDEX IF NOT EXISTS idx_hands_table_category ON hands(table_category);
 CREATE INDEX IF NOT EXISTS idx_hands_skipped ON hands(skipped);
 
 CREATE TABLE IF NOT EXISTS hand_players (
-  hand_id           TEXT NOT NULL REFERENCES hands(hand_id) ON DELETE CASCADE,
-  player_name       TEXT NOT NULL,
-  is_hero           INTEGER,
-  seat              INTEGER,
-  position          TEXT,
-  starting_stack    REAL,
-  hole_cards        TEXT,
-  net               REAL,
-  vpip              INTEGER,
-  pfr               INTEGER,
-  saw_flop          INTEGER,
-  hand_category     TEXT,
-  went_to_showdown  INTEGER,
-  won               INTEGER,
-  ev_adjustment_bb  REAL,
+  hand_id                TEXT NOT NULL REFERENCES hands(hand_id) ON DELETE CASCADE,
+  player_name            TEXT NOT NULL,
+  is_hero                INTEGER,
+  seat                   INTEGER,
+  position               TEXT,
+  starting_stack         REAL,
+  hole_cards             TEXT,
+  net                    REAL,
+  vpip                   INTEGER,
+  pfr                    INTEGER,
+  saw_flop               INTEGER,
+  hand_category          TEXT,
+  went_to_showdown       INTEGER,
+  won                    INTEGER,
+  ev_adjustment_bb       REAL,
+  -- Advanced-filters action flags (see buildHandRecords in handStore.js) —
+  -- all sourced straight from analyzeHand's existing return object
+  -- (src/stats.js), never a new computation, just newly persisted.
+  rfi                    INTEGER,
+  cold_call              INTEGER,
+  limped                 INTEGER,
+  three_bet              INTEGER,
+  folded_to_three_bet    INTEGER,
+  four_bet               INTEGER,
+  folded_to_four_bet     INTEGER,
+  squeeze                INTEGER,
+  attempt_steal          INTEGER,
+  folded_to_steal        INTEGER,
+  cbet_flop              INTEGER,
+  cbet_turn              INTEGER,
+  cbet_river             INTEGER,
+  folded_to_cbet_flop    INTEGER,
+  folded_to_cbet_turn    INTEGER,
+  folded_to_cbet_river   INTEGER,
+  check_raise_flop       INTEGER,
+  check_raise_turn       INTEGER,
+  check_raise_river      INTEGER,
+  won_at_showdown        INTEGER,
+  won_when_saw_flop      INTEGER,
   PRIMARY KEY (hand_id, player_name)
 ) WITHOUT ROWID;
 
@@ -102,6 +126,19 @@ function openDatabase(filePath) {
   // saw_flop) needs an explicit, idempotent ALTER TABLE for databases that
   // already existed before that column was added.
   ensureColumn(db, 'hand_players', 'saw_flop', 'INTEGER');
+  // Same idempotent migration for every advanced-filters column added
+  // alongside saw_flop's own precedent — a pre-existing database keeps
+  // whatever columns it had when created, regardless of what SCHEMA says now.
+  for (const col of [
+    'rfi', 'cold_call', 'limped', 'three_bet', 'folded_to_three_bet',
+    'four_bet', 'folded_to_four_bet', 'squeeze', 'attempt_steal', 'folded_to_steal',
+    'cbet_flop', 'cbet_turn', 'cbet_river',
+    'folded_to_cbet_flop', 'folded_to_cbet_turn', 'folded_to_cbet_river',
+    'check_raise_flop', 'check_raise_turn', 'check_raise_river',
+    'won_at_showdown', 'won_when_saw_flop',
+  ]) {
+    ensureColumn(db, 'hand_players', col, 'INTEGER');
+  }
   return db;
 }
 

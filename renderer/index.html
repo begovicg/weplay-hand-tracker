@@ -65,7 +65,7 @@
       </select>
     </div>
     <div class="filter-field">
-      <label for="filterWtsd">Went to Showdown</label>
+      <label for="filterWtsd">Showdown</label>
       <select id="filterWtsd">
         <option value="">Both</option>
         <option value="shown">Yes</option>
@@ -81,25 +81,82 @@
       </select>
     </div>
     <div class="filter-field">
-      <label for="filterPotBbMin">Pot (BB) min</label>
-      <input type="number" id="filterPotBbMin" placeholder="e.g. 10" min="0" step="0.5" class="filter-pot-input" />
+      <label for="filterIncludeBombPots" title="When set to No, bomb pot hands are excluded everywhere — stats, table, graph, and export">Include BP</label>
+      <select id="filterIncludeBombPots">
+        <option value="yes">Yes</option>
+        <option value="no">No</option>
+      </select>
     </div>
-    <div class="filter-field">
-      <label for="filterPotBbMax">Pot (BB) max</label>
-      <input type="number" id="filterPotBbMax" placeholder="e.g. 25" min="0" step="0.5" class="filter-pot-input" />
+    <div class="filter-field filter-search-wrap">
+      <button type="button" id="searchToggleBtn" class="search-toggle-btn" aria-expanded="false" aria-controls="searchPopup" title="Search hands">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      </button>
+      <div id="searchPopup" class="search-popup hidden">
+        <input type="text" id="filterSearch" placeholder="Hand ID, file, cards…" />
+      </div>
     </div>
-    <div class="filter-field filter-search">
-      <label for="filterSearch">Search</label>
-      <input type="text" id="filterSearch" placeholder="Hand ID, file, cards…" />
+    <button id="advancedFiltersToggle" class="btn btn-ghost btn-tiny" aria-expanded="false" aria-controls="advancedFiltersPanel" title="Advanced Filters">Filters ▾</button>
+    <button id="filterResetBtn" class="btn btn-ghost btn-tiny" title="Reset filters">Reset</button>
+  </section>
+
+  <!-- Collapsed by default — the same "Common Filters" / "Actions and
+       Opportunities" set PokerTracker/Hold'em Manager/Hand2Note treat as
+       standard, all reusing stats the engine already computes per hand (see
+       src/handStore.js buildHandRecords) and the same 3-way Both/Yes/No
+       control the Went to Showdown / Saw Flop filters above already use. -->
+  <section id="advancedFiltersPanel" class="advanced-filters-panel hidden">
+    <div class="advanced-filters-group">
+      <h3 class="advanced-filters-group-title">Preflop</h3>
+      <div class="filter-field"><label for="filterVpip">VPIP</label><select id="filterVpip"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterPfr">PFR</label><select id="filterPfr"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterRfi">RFI</label><select id="filterRfi"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterColdCall">Cold Call</label><select id="filterColdCall"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterLimped">Limped</label><select id="filterLimped"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterThreeBet">3-Bet</label><select id="filterThreeBet"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToThreeBet">Fold to 3-Bet</label><select id="filterFoldedToThreeBet"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFourBet">4-Bet</label><select id="filterFourBet"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToFourBet">Fold to 4-Bet</label><select id="filterFoldedToFourBet"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterSqueeze">Squeeze</label><select id="filterSqueeze"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
     </div>
-    <button id="filterResetBtn" class="btn btn-ghost btn-tiny">Reset filters</button>
+
+    <div class="advanced-filters-group">
+      <h3 class="advanced-filters-group-title">Steal &amp; Check-Raise</h3>
+      <div class="filter-field"><label for="filterAttemptSteal">Attempt Steal</label><select id="filterAttemptSteal"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToSteal">Fold to Steal</label><select id="filterFoldedToSteal"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterCheckRaiseFlop">Flop Check-Raise</label><select id="filterCheckRaiseFlop"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterCheckRaiseTurn">Turn Check-Raise</label><select id="filterCheckRaiseTurn"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterCheckRaiseRiver">River Check-Raise</label><select id="filterCheckRaiseRiver"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+    </div>
+
+    <div class="advanced-filters-group">
+      <h3 class="advanced-filters-group-title">C-Bet</h3>
+      <div class="filter-field"><label for="filterCbetFlop">Flop C-Bet</label><select id="filterCbetFlop"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterCbetTurn">Turn C-Bet</label><select id="filterCbetTurn"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterCbetRiver">River C-Bet</label><select id="filterCbetRiver"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToCbetFlop">Fold to Flop C-Bet</label><select id="filterFoldedToCbetFlop"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToCbetTurn">Fold to Turn C-Bet</label><select id="filterFoldedToCbetTurn"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToCbetRiver">Fold to River C-Bet</label><select id="filterFoldedToCbetRiver"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+    </div>
+
+    <div class="advanced-filters-group">
+      <h3 class="advanced-filters-group-title">Result &amp; Game</h3>
+      <div class="filter-field"><label for="filterWonAtShowdown">Won at Showdown</label><select id="filterWonAtShowdown"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterWonWhenSawFlop">Won when Saw Flop</label><select id="filterWonWhenSawFlop"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterRunItTwice">Run It Twice</label><select id="filterRunItTwice"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterPotBbMin">Pot (BB) min</label><input type="number" id="filterPotBbMin" placeholder="e.g. 10" min="0" step="0.5" class="filter-pot-input" /></div>
+      <div class="filter-field"><label for="filterPotBbMax">Pot (BB) max</label><input type="number" id="filterPotBbMax" placeholder="e.g. 25" min="0" step="0.5" class="filter-pot-input" /></div>
+      <div class="filter-field"><label for="filterStackBbMin">Stack (BB) min</label><input type="number" id="filterStackBbMin" placeholder="e.g. 40" min="0" step="1" class="filter-pot-input" /></div>
+      <div class="filter-field"><label for="filterStackBbMax">Stack (BB) max</label><input type="number" id="filterStackBbMax" placeholder="e.g. 150" min="0" step="1" class="filter-pot-input" /></div>
+      <div class="filter-field"><label for="filterStakesBbMin">Stakes (BB) min</label><input type="number" id="filterStakesBbMin" placeholder="e.g. 0.5" min="0" step="0.05" class="filter-pot-input" /></div>
+      <div class="filter-field"><label for="filterStakesBbMax">Stakes (BB) max</label><input type="number" id="filterStakesBbMax" placeholder="e.g. 5" min="0" step="0.05" class="filter-pot-input" /></div>
+    </div>
   </section>
 
   <nav class="tab-nav">
     <div class="tab-nav-inner">
       <button class="tab-btn active" data-tab="hands">Player Overview</button>
       <button class="tab-btn" data-tab="graph">Advanced Stats</button>
-      <button class="tab-btn" data-tab="import">Import Hands</button>
+      <button class="tab-btn" data-tab="import">Import/Export Hands</button>
     </div>
   </nav>
 
@@ -279,7 +336,7 @@
     </div>
   </main>
 
-  <footer class="app-footer">
+  <footer id="appFooter" class="app-footer">
     <p id="statsCaveat" class="stats-caveat"></p>
   </footer>
 

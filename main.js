@@ -122,7 +122,7 @@ function looksLikeValidHandDatabase(filePath) {
 
 // Backs up the entire database — everything, no filters — as a real
 // standalone .db file someone could hand to another machine or just keep
-// safe. Different from Export from Database (Import Hands tab), which is a
+// safe. Different from Export from Database (Import/Export Hands tab), which is a
 // filtered subset in plain text for sharing specific hands, not a full
 // disaster-recovery copy. WAL mode means recent writes can sit in a
 // separate -wal sidecar file rather than the main .db file itself — a
