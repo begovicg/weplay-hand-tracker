@@ -2,7 +2,16 @@
 
 const handFormatted = document.getElementById('handFormatted');
 const downloadHandBtn = document.getElementById('downloadHandBtn');
+const replayHandBtn = document.getElementById('replayHandBtn');
 const hdToolbarTitle = document.getElementById('hdToolbarTitle');
+
+// Module-level view state: which record is loaded, and whether we're
+// showing the static breakdown or stepping through the visual replayer.
+let currentReplay = null;
+let currentStatsByName = {};
+let currentLabelByName = {};
+let replayMode = false;
+let stepIndex = 0;
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -171,6 +180,120 @@ function renderFormatted(replay, statsByName) {
   return parts.join('\n');
 }
 
+// ── Visual table replayer ────────────────────────────────────────────
+// A step-through oval table: prev/next only, no autoplay. Every timeline
+// entry from src/handReplay.js is a full snapshot (pot, board, per-seat
+// stack, folded-so-far), so rendering any step is just reading that one
+// entry — no state carried between renders except which index we're on.
+
+// Seats placed around an ellipse, Hero always at the bottom, then the rest
+// of the table in real seat order going clockwise — matching the reference
+// screenshot's layout. `replay.players` is already sorted by ascending
+// seat number, so this is just a rotation, not a re-sort.
+function orderedSeatsFromHero(players) {
+  const heroIdx = players.findIndex((p) => p.isHero);
+  const startIdx = heroIdx === -1 ? 0 : heroIdx;
+  const n = players.length;
+  const ordered = [];
+  for (let i = 0; i < n; i++) ordered.push(players[(startIdx + i) % n]);
+  return ordered;
+}
+
+function seatLayoutPositions(n) {
+  const rx = 44, ry = 40;
+  const positions = [];
+  for (let i = 0; i < n; i++) {
+    const angle = (Math.PI / 2) - (i * 2 * Math.PI / n); // start at bottom, clockwise
+    positions.push({
+      xPct: 50 + rx * Math.cos(angle),
+      yPct: 50 + ry * Math.sin(angle),
+    });
+  }
+  return positions;
+}
+
+function renderSeat(player, pos, step, replay) {
+  const label = player.isHero ? 'Hero' : player.position;
+  const stackBB = step.stacksBB[player.name];
+  const isFolded = step.foldedSoFar.includes(player.name);
+  const isDealer = player.position === 'BTN';
+  const showdownReached = step.kind === 'showdown' || step.kind === 'result';
+  const shown = replay.showdown.find((sd) => sd.name === player.name);
+
+  let cardsHtml = '';
+  if (player.isHero && replay.heroCards) cardsHtml = renderCards(replay.heroCards);
+  else if (showdownReached && shown) cardsHtml = renderCards(shown.cards);
+
+  return `<div class="hd-seat${player.isHero ? ' hero' : ''}${isFolded ? ' folded' : ''}" style="left:${pos.xPct}%; top:${pos.yPct}%;">
+    ${isDealer ? '<span class="hd-dealer-badge">D</span>' : ''}
+    <div class="hd-seat-label">${escapeHtml(label)}</div>
+    ${cardsHtml ? `<div class="hd-seat-cards">${cardsHtml}</div>` : ''}
+    <div class="hd-seat-stack">${stackBB} BB</div>
+  </div>`;
+}
+
+function renderTableCenter(step) {
+  const boardHtml = step.board.length ? renderCards(step.board.join(' ')) : '<span class="hd-table-board-empty">Waiting for board…</span>';
+  return `<div class="hd-table-center">
+    <div class="hd-table-board">${boardHtml}</div>
+    <div class="hd-table-pot">Pot: ${step.potBB} BB</div>
+  </div>`;
+}
+
+function stepCaption(step, labelByName, heroName, replay) {
+  if (step.kind === 'start') return 'Hand dealt, antes/blinds posted.';
+  if (step.kind === 'street') {
+    const streetLabel = step.street.charAt(0).toUpperCase() + step.street.slice(1);
+    return `${streetLabel}${step.run === 2 ? ' (Run 2)' : ''} dealt.`;
+  }
+  if (step.kind === 'action') {
+    const label = labelByName[step.player] || step.player;
+    return label + step.actionText.slice(step.player.length);
+  }
+  if (step.kind === 'showdown') return 'Showdown.';
+  if (step.kind === 'result') {
+    if (!replay.winners.length) return 'No winner could be determined for this hand.';
+    return replay.winners.map((w) => `${w.isHero ? 'Hero' : (labelByName[w.name] || w.name)} wins ${w.amountBB} BB`).join(', ');
+  }
+  return '';
+}
+
+function transportIcon(d) {
+  return `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="${d}"/></svg>`;
+}
+
+function renderReplayTable(replay, labelByName) {
+  const timeline = replay.timeline;
+  const step = timeline[stepIndex];
+  const ordered = orderedSeatsFromHero(replay.players);
+  const positions = seatLayoutPositions(ordered.length);
+  const seatsHtml = ordered.map((p, i) => renderSeat(p, positions[i], step, replay)).join('');
+  const atStart = stepIndex === 0;
+  const atEnd = stepIndex === timeline.length - 1;
+
+  return `
+    <div class="hd-table">
+      ${seatsHtml}
+      ${renderTableCenter(step)}
+    </div>
+    <div class="hd-transport">
+      <button class="hd-icon-btn" data-step-action="first" ${atStart ? 'disabled' : ''} title="First step">${transportIcon('M6 5h2v14H6zM19 5 8 12l11 7z')}</button>
+      <button class="hd-icon-btn" data-step-action="prev" ${atStart ? 'disabled' : ''} title="Previous step">${transportIcon('m15 5-7 7 7 7z')}</button>
+      <button class="hd-icon-btn" data-step-action="next" ${atEnd ? 'disabled' : ''} title="Next step">${transportIcon('m9 5 7 7-7 7z')}</button>
+      <button class="hd-icon-btn" data-step-action="last" ${atEnd ? 'disabled' : ''} title="Last step">${transportIcon('M16 5h2v14h-2zM5 5l11 7-11 7z')}</button>
+      <div class="hd-transport-caption">${escapeHtml(stepCaption(step, labelByName, replay.heroName, replay))}</div>
+      <div class="hd-transport-progress">${stepIndex + 1} / ${timeline.length}</div>
+    </div>`;
+}
+
+function renderCurrentView() {
+  if (replayMode && currentReplay && currentReplay.timeline && currentReplay.timeline.length) {
+    handFormatted.innerHTML = renderReplayTable(currentReplay, currentLabelByName);
+  } else {
+    handFormatted.innerHTML = renderFormatted(currentReplay, currentStatsByName);
+  }
+}
+
 async function init() {
   const params = new URLSearchParams(window.location.search);
   const handId = params.get('handId');
@@ -192,12 +315,38 @@ async function init() {
     return;
   }
 
-  const statsByName = record.replay
+  currentReplay = record.replay;
+  currentStatsByName = record.replay
     ? await window.handDetail.getQuickPlayerStats(record.replay.players.map((p) => p.name))
     : {};
+  currentLabelByName = record.replay ? buildLabelByName(record.replay) : {};
 
   hdToolbarTitle.innerHTML = renderToolbarTitle(record.replay);
-  handFormatted.innerHTML = renderFormatted(record.replay, statsByName);
+  renderCurrentView();
+
+  const canReplay = !!(currentReplay && currentReplay.timeline && currentReplay.timeline.length);
+  replayHandBtn.disabled = !canReplay;
+  replayHandBtn.title = canReplay ? 'Replay hand' : 'Replay unavailable for this hand';
+  replayHandBtn.addEventListener('click', () => {
+    if (!canReplay) return;
+    replayMode = !replayMode;
+    if (replayMode) stepIndex = 0;
+    replayHandBtn.classList.toggle('hd-icon-btn-active', replayMode);
+    replayHandBtn.title = replayMode ? 'Back to summary' : 'Replay hand';
+    renderCurrentView();
+  });
+
+  handFormatted.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-step-action]');
+    if (!btn || btn.disabled || !replayMode) return;
+    const timeline = currentReplay.timeline;
+    const action = btn.dataset.stepAction;
+    if (action === 'first') stepIndex = 0;
+    else if (action === 'prev') stepIndex = Math.max(0, stepIndex - 1);
+    else if (action === 'next') stepIndex = Math.min(timeline.length - 1, stepIndex + 1);
+    else if (action === 'last') stepIndex = timeline.length - 1;
+    renderCurrentView();
+  });
 
   downloadHandBtn.addEventListener('click', async () => {
     downloadHandBtn.disabled = true;
