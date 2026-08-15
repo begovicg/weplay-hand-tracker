@@ -1,6 +1,6 @@
 {
   "name": "weplay-hand-tracker",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "A hand history manager for Weplay poker — import, browse, filter, and review your hands, plus convert them into CoinPoker format for Hand2Note / PokerTracker.",
   "main": "main.js",
   "private": true,
