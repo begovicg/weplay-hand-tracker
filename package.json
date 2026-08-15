@@ -11,7 +11,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "set NODE_ENV=development && electron .",
-    "test": "node test/converter.test.js && node test/stats.test.js && node test/zipReader.test.js && node test/handStore.test.js && node test/handReplay.test.js && node test/handEvaluator.test.js && node test/equity.test.js && node test/evAnalysis.test.js && node test/chartMath.test.js",
+    "test": "node test/converter.test.js && node test/stats.test.js && node test/zipReader.test.js && node test/handStore.test.js && node test/handReplay.test.js && node test/handEvaluator.test.js && node test/equity.test.js && node test/evAnalysis.test.js && node test/chartMath.test.js && node test/liveSync.test.js",
     "dist": "electron-builder --win"
   },
   "devDependencies": {

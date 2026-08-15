@@ -102,6 +102,16 @@ CREATE INDEX IF NOT EXISTS idx_hp_hero ON hand_players(is_hero);
 CREATE INDEX IF NOT EXISTS idx_hp_hand_category ON hand_players(hand_category);
 CREATE INDEX IF NOT EXISTS idx_hp_position ON hand_players(position);
 CREATE INDEX IF NOT EXISTS idx_hp_net ON hand_players(net);
+
+-- Small key/value store for app-level config (currently just Live Sync's
+-- watched folder + enabled flag — see src/liveSync.js) — a real table
+-- rather than a separate JSON settings file, so it lives in the same
+-- database file/connection/backup as everything else instead of being a
+-- second thing that can go out of sync with it.
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT
+) WITHOUT ROWID;
 `;
 
 function openDatabase(filePath) {
@@ -149,4 +159,16 @@ function ensureColumn(db, table, column, definition) {
   }
 }
 
-module.exports = { openDatabase, SCHEMA };
+// getSetting returns null for a key that was never set (not undefined —
+// callers can == null check the same way they already do for nullable DB
+// columns elsewhere in this app).
+function getSetting(db, key) {
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+
+function setSetting(db, key, value) {
+  db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(key, value);
+}
+
+module.exports = { openDatabase, SCHEMA, getSetting, setSetting };

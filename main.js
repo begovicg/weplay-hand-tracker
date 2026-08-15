@@ -8,7 +8,7 @@ const fs = require('fs');
 const { convertFile } = require('./src/converter');
 const { createZip } = require('./src/zipWriter');
 const { extractTextFiles } = require('./src/zipReader');
-const { openDatabase } = require('./src/db');
+const { openDatabase, getSetting, setSetting } = require('./src/db');
 const {
   importFileIntoStore, queryHands, getDistinctValues, getHandById, getConvertedText,
   queryRawHandsForStats, getAllPlayerNames,
@@ -28,6 +28,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 let mainWindow;
 const handWindows = new Map(); // "handId::perspectivePlayer" -> BrowserWindow, so re-clicking the same hand (from the same perspective) focuses instead of duplicating
+let liveSyncWorker = null; // Worker running src/liveSyncWorker.js, or null when not running
 
 // ── Hand database ────────────────────────────────────────────────────────
 // SQLite (via Node's built-in node:sqlite — no external dependency needed;
@@ -93,12 +94,51 @@ function getDb() {
   return db;
 }
 
+function stopLiveSync() {
+  if (liveSyncWorker) {
+    liveSyncWorker.terminate();
+    liveSyncWorker = null;
+  }
+}
+
 function closeDb() {
   stopBackfillWorker();
+  stopLiveSync(); // its own separate DB connection (see liveSyncWorker.js) would otherwise outlive this one closing/swapping underneath it
   if (db) {
     try { db.close(); } catch (err) { /* already closed or unusable, nothing to do */ }
     db = null;
   }
+}
+
+// Starts (or restarts) Live Sync against `folderPath` on its own worker
+// thread — see src/liveSyncWorker.js for why: the initial catch-up scan
+// alone measured ~56s against a real 62-file/29,000-hand folder, which
+// would freeze this window for that entire time if run on the main
+// thread. Persists both the folder and the enabled flag so it resumes
+// automatically next launch — see resumeLiveSyncIfEnabled() below, called
+// once at startup.
+function beginLiveSync(folderPath) {
+  stopLiveSync();
+  const database = getDb();
+  setSetting(database, 'liveSyncFolder', folderPath);
+  setSetting(database, 'liveSyncEnabled', '1');
+  liveSyncWorker = new Worker(path.join(__dirname, 'src', 'liveSyncWorker.js'), {
+    workerData: { dbPath, folderPath, options: { replaceHeroName: true } },
+  });
+  liveSyncWorker.on('message', (msg) => {
+    if (msg.phase === 'update' && mainWindow && !mainWindow.isDestroyed()) {
+      const { phase, ...totals } = msg;
+      mainWindow.webContents.send('live-sync-status', { running: true, folderPath, ...totals });
+    }
+  });
+  liveSyncWorker.on('error', (err) => console.error('Live Sync worker crashed:', err));
+}
+
+function resumeLiveSyncIfEnabled() {
+  const database = getDb();
+  const folderPath = getSetting(database, 'liveSyncFolder');
+  const enabled = getSetting(database, 'liveSyncEnabled') === '1';
+  if (enabled && folderPath && fs.existsSync(folderPath)) beginLiveSync(folderPath);
 }
 
 // Confirms a file is actually a Weplay Hand Tracker database (has the two
@@ -213,6 +253,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
+  resumeLiveSyncIfEnabled();
 });
 
 app.on('window-all-closed', () => {
@@ -376,6 +417,45 @@ ipcMain.handle('import-to-hand-store', async (event, files, options) => {
   }
   totals.grandTotal = getTotalHandCount(database);
   return totals;
+});
+
+// ── IPC: Live Sync ───────────────────────────────────────────────────────
+// Watches the folder Weplay itself writes hand histories to and imports new
+// hands as they land — see src/liveSync.js for the actual watching/scanning
+// logic; this is just the UI-facing control surface (pick a folder,
+// start/stop, and report current state on load so the Import/Export tab can
+// restore its own UI without a separate "are we running" round trip).
+
+ipcMain.handle('pick-live-sync-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select the folder Weplay writes hand histories to',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || !result.filePaths[0]) return { folderPath: null };
+  return { folderPath: result.filePaths[0] };
+});
+
+ipcMain.handle('start-live-sync', async (event, folderPath) => {
+  if (!folderPath || !fs.existsSync(folderPath)) {
+    return { running: false, error: 'That folder doesn\'t exist (or isn\'t accessible).' };
+  }
+  beginLiveSync(folderPath);
+  return { running: true, folderPath };
+});
+
+ipcMain.handle('stop-live-sync', async () => {
+  stopLiveSync();
+  const database = getDb();
+  setSetting(database, 'liveSyncEnabled', '0');
+  return { running: false };
+});
+
+ipcMain.handle('get-live-sync-state', async () => {
+  const database = getDb();
+  return {
+    running: liveSyncWorker !== null,
+    folderPath: getSetting(database, 'liveSyncFolder'),
+  };
 });
 
 // Exports whatever the shared filter bar currently matches, straight from

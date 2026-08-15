@@ -24,4 +24,14 @@ contextBridge.exposeInMainWorld('weplayConverter', {
   // receives { phase: 'start' } once, then eventually either
   // { phase: 'done', deepStatsFixed, evFixed } or { phase: 'error', error }.
   onBackfillStatus: (callback) => ipcRenderer.on('backfill-status', (event, payload) => callback(payload)),
+  pickLiveSyncFolder: () => ipcRenderer.invoke('pick-live-sync-folder'),
+  startLiveSync: (folderPath) => ipcRenderer.invoke('start-live-sync', folderPath),
+  stopLiveSync: () => ipcRenderer.invoke('stop-live-sync'),
+  getLiveSyncState: () => ipcRenderer.invoke('get-live-sync-state'),
+  // Same one-way push shape as onBackfillStatus above — main.js's
+  // liveSync.js watcher reports on its own schedule (whenever a debounced
+  // folder rescan actually touches a file), not in response to a request.
+  // callback receives { running, folderPath, added, updated, skipped,
+  // filesProcessed, errors }.
+  onLiveSyncStatus: (callback) => ipcRenderer.on('live-sync-status', (event, payload) => callback(payload)),
 });

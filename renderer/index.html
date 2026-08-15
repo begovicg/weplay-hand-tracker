@@ -162,6 +162,24 @@
 
   <main>
     <div id="tabImport" class="tab-content">
+    <section id="liveSyncSection" class="live-sync-section">
+      <div class="section-head">
+        <h2>Live Sync</h2>
+        <span id="liveSyncStatusBadge" class="live-sync-badge live-sync-off">Off</span>
+      </div>
+      <p class="hero-note">Watches the folder Weplay writes hand histories to and imports new hands automatically while you play, table by table — no manual import needed after a session.</p>
+      <div class="options live-sync-controls">
+        <div class="filter-field live-sync-folder-field">
+          <label for="liveSyncFolderPath">Folder</label>
+          <input type="text" id="liveSyncFolderPath" placeholder="Not set" readonly />
+        </div>
+        <button id="liveSyncChooseFolderBtn" class="btn btn-ghost">Choose Folder…</button>
+        <button id="liveSyncToggleBtn" class="btn btn-primary" disabled>Start Live Sync</button>
+        <button id="liveSyncRefreshNowBtn" class="btn btn-ghost" title="Refresh the Hands table, Stats, and Graph right now, without waiting for the next auto-detected change">Refresh Now</button>
+      </div>
+      <p id="liveSyncStatusText" class="live-sync-status-text"></p>
+    </section>
+
     <section id="dropzone" class="dropzone">
       <div class="dropzone-inner">
         <p class="dropzone-title">Drag &amp; drop Weplay hand history .txt files (or a .zip of them) here</p>

@@ -131,6 +131,54 @@ main {
   padding: 14px 24px var(--footer-space, 110px);
 }
 
+/* Live Sync — watches Weplay's own hand-history folder and imports as you
+   play (src/liveSync.js). Its own bordered card, same visual language as
+   .results-summary, so it reads as the tab's headline capability rather
+   than blending into the manual drag-and-drop flow beneath it. */
+.live-sync-section {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 20px;
+}
+
+.live-sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.live-sync-badge.live-sync-off { color: var(--text-faint); background: var(--bg-panel-2); border: 1px solid var(--border); }
+.live-sync-badge.live-sync-on { color: var(--ok); background: var(--ok-bg); border: 1px solid rgba(74, 222, 128, 0.25); }
+
+.live-sync-controls {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.live-sync-folder-field { flex: 1; min-width: 260px; }
+
+.live-sync-folder-field input {
+  width: 100%;
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.live-sync-status-text {
+  margin: 12px 0 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
 .dropzone {
   border: 1.5px dashed var(--border);
   border-radius: var(--radius);

@@ -15,6 +15,12 @@ const clearBtn = document.getElementById('clearBtn');
 const convertBtn = document.getElementById('convertBtn');
 const importDbBtn = document.getElementById('importDbBtn');
 const replaceHeroToggle = document.getElementById('replaceHeroToggle');
+const liveSyncStatusBadge = document.getElementById('liveSyncStatusBadge');
+const liveSyncFolderPath = document.getElementById('liveSyncFolderPath');
+const liveSyncChooseFolderBtn = document.getElementById('liveSyncChooseFolderBtn');
+const liveSyncToggleBtn = document.getElementById('liveSyncToggleBtn');
+const liveSyncRefreshNowBtn = document.getElementById('liveSyncRefreshNowBtn');
+const liveSyncStatusText = document.getElementById('liveSyncStatusText');
 const exportCountLabel = document.getElementById('exportCountLabel');
 const exportFormat = document.getElementById('exportFormat');
 const exportBtn = document.getElementById('exportBtn');
@@ -214,6 +220,102 @@ window.weplayConverter.onBackfillStatus((status) => {
     showToast('Finished a one-time database update in the background — stats refreshed.');
     if (mainState.loaded) refreshEverything({ quiet: true });
   }
+});
+
+// ── Live Sync ──────────────────────────────────────────────────────────
+// Watches Weplay's own hand-history folder (src/liveSync.js, driven from
+// main.js) and imports new hands as they land while you play. The click
+// handler below owns the "just started/stopped" transition directly
+// (enabling the button, flipping the badge) rather than waiting on the
+// push event for that — a catch-up scan that finds nothing new (an empty
+// or already-fully-imported folder) never fires onLiveSyncStatus at all,
+// which would otherwise leave the button stuck disabled forever on a
+// successful-but-uneventful start.
+function setLiveSyncBadge(running) {
+  liveSyncStatusBadge.textContent = running ? 'On' : 'Off';
+  liveSyncStatusBadge.classList.toggle('live-sync-on', running);
+  liveSyncStatusBadge.classList.toggle('live-sync-off', !running);
+  liveSyncToggleBtn.textContent = running ? 'Stop Live Sync' : 'Start Live Sync';
+}
+
+liveSyncChooseFolderBtn.addEventListener('click', async () => {
+  const { folderPath } = await window.weplayConverter.pickLiveSyncFolder();
+  if (folderPath) {
+    liveSyncFolderPath.value = folderPath;
+    liveSyncToggleBtn.disabled = false;
+  }
+});
+
+liveSyncToggleBtn.addEventListener('click', async () => {
+  const running = liveSyncStatusBadge.classList.contains('live-sync-on');
+  liveSyncToggleBtn.disabled = true;
+  try {
+    if (running) {
+      await window.weplayConverter.stopLiveSync();
+      setLiveSyncBadge(false);
+      liveSyncStatusText.textContent = 'Stopped.';
+    } else {
+      const result = await window.weplayConverter.startLiveSync(liveSyncFolderPath.value);
+      if (result.error) {
+        showToast(result.error);
+      } else {
+        setLiveSyncBadge(true);
+        liveSyncStatusText.textContent = 'Watching for new hands…';
+      }
+    }
+  } catch (err) {
+    console.error('Live Sync toggle failed:', err);
+    showToast('Something went wrong — see the console for details.');
+  } finally {
+    liveSyncToggleBtn.disabled = false;
+  }
+});
+
+// A manual escape hatch alongside the automatic refresh below — the
+// automatic one only fires from an actual Live Sync push event, so if
+// you're sitting on a tab that isn't re-fetching on its own for any reason
+// (or just want to double-check right now rather than wait), this forces
+// the same Hands/Stats/Graph refresh on demand.
+liveSyncRefreshNowBtn.addEventListener('click', async () => {
+  liveSyncRefreshNowBtn.disabled = true;
+  try {
+    if (mainState.loaded) await refreshEverything({ quiet: false });
+    else await loadHandsAndStats();
+    showToast('Refreshed.');
+  } catch (err) {
+    console.error('Manual refresh failed:', err);
+    showToast('Refresh failed — see the console for details.');
+  } finally {
+    liveSyncRefreshNowBtn.disabled = false;
+  }
+});
+
+// Ongoing updates only — every debounced rescan that actually found a
+// changed file (src/liveSync.js only calls onChange when filesProcessed >
+// 0 or there's an error, so this stays silent through the many rescans
+// that find nothing, which is most of them).
+window.weplayConverter.onLiveSyncStatus((status) => {
+  setLiveSyncBadge(status.running);
+  const now = new Date().toLocaleTimeString();
+  if (status.errors && status.errors.length > 0) {
+    liveSyncStatusText.textContent = `${now} — ${status.errors.join(' ')}`;
+    return;
+  }
+  const parts = [`${status.filesProcessed} file(s) rescanned`];
+  if (status.added) parts.push(`${status.added} new hand(s)`);
+  if (status.updated) parts.push(`${status.updated} updated`);
+  liveSyncStatusText.textContent = `${now} — ${parts.join(', ')}.`;
+  if (status.added > 0 && mainState.loaded) refreshEverything({ quiet: true });
+});
+
+// Restores whatever Live Sync's own state already was on load — it may
+// have auto-resumed in main.js (resumeLiveSyncIfEnabled) before this
+// window even finished loading, so this tab's controls need to reflect
+// that reality, not always start blank.
+window.weplayConverter.getLiveSyncState().then((liveSyncState) => {
+  if (liveSyncState.folderPath) liveSyncFolderPath.value = liveSyncState.folderPath;
+  liveSyncToggleBtn.disabled = !liveSyncState.folderPath;
+  setLiveSyncBadge(liveSyncState.running);
 });
 
 function buildSupportReport(fileName, hand) {
@@ -1249,6 +1351,15 @@ async function refreshEverything({ resetPage, quiet } = {}) {
   if (resetPage) tableState.offset = 0;
   if (!quiet) setBusy(true, 'Loading…');
   try {
+    // Keeps the Stakes/Table/Position dropdowns themselves current, not
+    // just the data they filter — without this, a stake that first shows
+    // up well after the app's initial load (e.g. Live Sync importing a
+    // session at a limit you hadn't played before) never appears as an
+    // option, even though hands at that stake are already sitting in the
+    // table right below it. Cheap enough (a plain DISTINCT query) to run
+    // on every refresh, including a routine tab switch, not just explicit
+    // import/restore actions.
+    await refreshFilterOptions();
     await refreshStats();
     await loadHandsPage();
   } catch (err) {
@@ -1292,8 +1403,7 @@ importDbBtn.addEventListener('click', async () => {
     const result = await window.weplayConverter.importToHandStore(state.files, options);
     setActiveTab('hands');
     await refreshPlayerOptions();
-    await refreshFilterOptions();
-    await refreshEverything({ resetPage: true });
+    await refreshEverything({ resetPage: true }); // now includes refreshFilterOptions itself
     // Shown only after the refresh above completes, not before — a
     // success toast that appears while the UI is still stale (or about to
     // fail to refresh) is worse than no toast at all. Includes the
@@ -1358,8 +1468,7 @@ restoreBtn.addEventListener('click', async () => {
       // same staleness risk applies (and mainState.loaded is already true
       // by now, so this can't rely on the first-load path to catch it).
       await refreshPlayerOptions();
-      await refreshFilterOptions();
-      await refreshEverything({ resetPage: true });
+      await refreshEverything({ resetPage: true }); // now includes refreshFilterOptions itself
       showToast(`Restored — database now has ${result.hands.toLocaleString()} hands.`);
     } else if (result && result.error) {
       showToast(result.error);
