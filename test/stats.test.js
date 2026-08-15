@@ -1583,4 +1583,61 @@ Seat 2: Hero (big blind) collected ($1)`;
   assert.deepStrictEqual(result.streetAgg.TURN, { agg: 1, calls: 0, folds: 0, checks: 0 }, 'the turn bet is one aggressive action');
 });
 
+// ── Rake ─────────────────────────────────────────────────────────────────
+// Weplay's raw "X collected $Y from pot" line states the PRE-rake amount
+// (confirmed against real data — see src/stats.js's distributeRakeReduction
+// comment), so net/rakePaid both need the SUMMARY line's stated rake
+// subtracted, not the raw collected figure used as-is.
+
+test('analyzeHand: rakePaid is the exact rake Weplay charged when hero is the sole winner, and net is rake-adjusted', () => {
+  // HAND_4BET_AS_RAISER: Hero collects $56 from a $56 pot, Rake $2.8, sole winner.
+  const r = analyzeHand(HAND_4BET_AS_RAISER, 'Hero');
+  assert.strictEqual(r.rakePaid, 2.8, 'sole winner pays the full stated rake, not a formula-derived guess');
+  // contributed: "raises $A to $B" tracks A as the increment ABOVE HERO'S
+  // OWN prior contribution this street, not relative to $B or to whichever
+  // bet is being raised over — confirmed against a real captured hand with
+  // a genuine same-player preflop re-raise (5.25 then 44.75, reaching
+  // exactly 5.25+44.75=50.00, the stated new total). So here: preflop
+  // 1.5 (first raise) + 12 (re-raise increment) + flop bet 10 = 23.5.
+  const contributed = 1.5 + 12 + 10;
+  assert.ok(Math.abs(r.net - (56 - 2.8 - contributed)) < 0.001, 'net reflects the rake-adjusted collected amount, not the raw pre-rake one');
+});
+
+test('analyzeHand: rakePaid is zero on a hand hero didn\'t collect from, even when real rake was taken', () => {
+  const hand = `Weplay Hand #900:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 18:30:00 UTC
+Table 'Test'(111) 3-max Seat #1 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: PlayerB ($100 in chips)
+Seat 3: PlayerC ($100 in chips)
+PlayerB: posts small blind $0.25
+PlayerC: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+Hero: raises $1.5 to $1.5
+PlayerB: folds
+PlayerC: calls $1
+*** FLOP *** [Kh Qh 2d]
+PlayerC: bets $2
+Hero: folds
+Uncalled bet ($0) returned to PlayerC
+*** SHOW DOWN ***
+PlayerC collected $5.70 from pot
+*** SUMMARY ***
+Total pot $6 | Rake $0.30
+Seat 1: Hero folded on the Flop
+Seat 2: PlayerB (small blind) folded before Flop
+Seat 3: PlayerC (big blind) collected ($5.70)`;
+  const r = analyzeHand(hand, 'Hero');
+  assert.strictEqual(r.rakePaid, 0, 'rake only ever reduces a winner\'s payout — Hero folded, so none of it was billed to them');
+});
+
+test('aggregateStats: totalRakePaid sums rakePaid the same way netResult sums net', () => {
+  const hands = [
+    { ...analyzeHand(HAND_4BET_AS_RAISER, 'Hero'), isBombPot: false },
+    { ...analyzeHand(HAND_4BET_AS_CALLER, 'Hero'), isBombPot: false },
+  ];
+  const stats = aggregateStats(hands);
+  assert.ok(Math.abs(stats.totalRakePaid - 5.6) < 0.001, 'two hands at $2.80 rake each, Hero the sole winner both times');
+});
+
 console.log(`\n${passed} test(s) passed.`);

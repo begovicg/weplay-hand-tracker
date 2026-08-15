@@ -825,12 +825,12 @@ function renderStats(payload) {
   }
 
   statsCards.appendChild(statCard('Hands', stats.hands.toLocaleString(), '', 'matching current filters'));
-  statsCards.appendChild(statCard('Winnings', fmtMoney(stats.netResult), moneyClass(stats.netResult)));
+  statsCards.appendChild(statCard('Winnings', fmtMoney(stats.netResult), moneyClass(stats.netResult), stats.totalRakePaid > 0 ? `${fmtMoney(stats.totalRakePaid)} raked` : ''));
   statsCards.appendChild(statCard('VPIP', fmtPct(stats.vpip), '', `${stats.nonBombPotHands} hands`));
   statsCards.appendChild(statCard('Home', homeStakesLabel(stats.byStake) || '—', ''));
   statsCards.appendChild(statCard('Winrate', stats.bb100 != null ? `${stats.bb100.toFixed(1)} bb/100` : '—', moneyClass(stats.bb100)));
   statsCards.appendChild(statCard('PFR', fmtPct(stats.pfr), ''));
-  statsCards.appendChild(statCard('WWSF', fmtPct(stats.wonWhenSawFlop), '', 'saw flop'));
+  statsCards.appendChild(statCard('WWSF', fmtPct(stats.wonWhenSawFlop), '', ''));
   statsCards.appendChild(statCard('Expected V', evBb100 != null ? `${evBb100.toFixed(1)} bb/100` : '—', moneyClass(evBb100), evAdjustedHandCount ? `${evAdjustedHandCount} all-in adj.` : 'no all-ins yet'));
   statsCards.appendChild(statCard('3Bet', fmtPct(stats.threeBet), '', `${stats.threeBetOppCount} opps`));
 

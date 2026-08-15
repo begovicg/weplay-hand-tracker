@@ -25,6 +25,7 @@ const RE_BET = /^(.+?): bets \$([0-9.]+)(\s+and is all-in)?$/;
 const RE_RAISE = /^(.+?): raises \$([0-9.]+) to \$([0-9.]+)(\s+and is all-in)?$/;
 const RE_UNCALLED = /^Uncalled bet \(\$([0-9.]+)\) returned to (.+)$/;
 const RE_COLLECTED = /^(.+?) collected \$([0-9.]+) from (?:pot|main pot|side pot(?:-\d+)?)$/;
+const RE_TOTAL_POT = /^Total pot \$([0-9.]+)(?:\s+Main pot \$([0-9.]+)\.((?:\s+Side pot(?:-\d+)? \$[0-9.]+\.)*))?\s*\|\s*Rake \$([0-9.]+)\s*$/;
 const RE_SHOWS = /^(.+?): shows \[(.*?)\] \((.+?)\)$/;
 // Same guard used in src/handReplay.js's showdown detection — excludes the
 // known Weplay quirk where a folded/losing player's cards get shown as
@@ -35,6 +36,39 @@ const RE_SHOWS = /^(.+?): shows \[(.*?)\] \((.+?)\)$/;
 // fixed while wiring up the Advanced Graph's showdown/non-showdown split.
 function hasValidCards(str) {
   return /^[2-9TJQKA][cdhs](\s+[2-9TJQKA][cdhs])*$/i.test((str || '').trim());
+}
+
+// A real Weplay quirk, confirmed against real data: every "X collected $Y
+// from pot" line states the PRE-rake amount (equal to the hand's stated
+// Total pot when there's one winner) — rake is never actually subtracted
+// from what's shown there. src/converter.js and src/handReplay.js both
+// already correct for this (proportionally, across every pot tier a hand
+// paid out from) before ever showing a dollar figure to anyone; this module
+// used to be the one place that didn't, silently overstating every hand a
+// player won by their share of the rake — invisible per-hand (rake is a few
+// percent) but large in aggregate (confirmed: ~60% of a real multi-thousand-
+// hand net/bb100 discrepancy against an independent PokerTracker import of
+// this same data). Duplicated here rather than imported so this module has
+// no dependency on converter.js's internals, matching the project's
+// existing self-contained-module pattern (see src/handReplay.js's own copy).
+function centsOf(str) {
+  return Math.round(parseFloat(str) * 100);
+}
+function distributeRakeReduction(items, rakeCents) {
+  if (rakeCents <= 0) return items.map((it) => ({ ...it, adjustedCents: it.cents }));
+  const groupTotal = items.reduce((s, it) => s + it.cents, 0);
+  if (groupTotal <= 0) return items.map((it) => ({ ...it, adjustedCents: it.cents }));
+  let allocated = 0;
+  const withShare = items.map((it) => {
+    const share = (it.cents / groupTotal) * rakeCents;
+    const floorShare = Math.floor(share);
+    allocated += floorShare;
+    return { ...it, floorShare, frac: share - floorShare };
+  });
+  let remainder = rakeCents - allocated;
+  withShare.sort((a, b) => b.frac - a.frac);
+  for (let i = 0; i < withShare.length && remainder > 0; i++, remainder--) withShare[i].floorShare += 1;
+  return withShare.map((it) => ({ ...it, adjustedCents: it.cents - it.floorShare }));
 }
 
 // ── Position labeling ───────────────────────────────────────────────────
@@ -180,8 +214,13 @@ function analyzeHand(block, heroNameOverride) {
 
   let street = 'PREFLOP';
   let contributed = 0;
-  let collected = 0;
   let anyCollected = false;
+  // Every "collected" line in the hand, not just hero's — rake has to be
+  // distributed across the whole group of collectors (see
+  // distributeRakeReduction above), not computed on hero's line in
+  // isolation, since a hand can have more than one winner (a split pot) or
+  // more than one pot tier (side pots) rake is paid out of.
+  const collectedLines = [];
   let voluntaryPreflopAction = false;
   let preflopRaise = false;
   let madeThreeBet = false; // hero re-raised while facing exactly one prior raise
@@ -529,16 +568,45 @@ function analyzeHand(block, heroNameOverride) {
       continue;
     }
     if ((m = RE_UNCALLED.exec(l)) && m[2] === hero) { contributed -= parseFloat(m[1]); continue; }
-    if ((m = RE_COLLECTED.exec(l)) && m[1] === hero) { collected += parseFloat(m[2]); anyCollected = true; continue; }
+    if ((m = RE_COLLECTED.exec(l))) {
+      collectedLines.push({ name: m[1], cents: centsOf(m[2]) });
+      if (m[1] === hero) anyCollected = true;
+      continue;
+    }
   }
 
   // A hand with no resolution anywhere (a real Weplay data gap — e.g. a
   // disconnect at showdown that's never resolved) can't be attributed a
   // result, so exclude it entirely rather than silently treat it as a $0
   // hand — this mirrors the converter's own skip condition for the same case.
-  let hasResolution = false;
-  for (const l of lines) { if (RE_COLLECTED.test(l)) { hasResolution = true; break; } }
-  if (!hasResolution) return null;
+  if (collectedLines.length === 0) return null;
+
+  // The SUMMARY line's rake figure covers the whole hand (every pot tier
+  // combined), not just one collected-line — extracted once here rather
+  // than tracked incrementally during the line-by-line scan above, then
+  // applied proportionally across every collector via
+  // distributeRakeReduction (see its own comment for why this matters).
+  let rakeCents = 0;
+  for (const l of lines) {
+    const tm = RE_TOTAL_POT.exec(l);
+    if (tm) { rakeCents = centsOf(tm[4]); break; }
+  }
+  const rakeAdjustedLines = distributeRakeReduction(
+    collectedLines.map((c, idx) => ({ ...c, idx })),
+    rakeCents,
+  );
+  const heroPreRakeCents = collectedLines.filter((c) => c.name === hero).reduce((sum, c) => sum + c.cents, 0);
+  const collected = rakeAdjustedLines
+    .filter((c) => c.name === hero)
+    .reduce((sum, c) => sum + c.adjustedCents, 0) / 100;
+  // What hero's own share of the rake actually cost them on this hand —
+  // zero on a hand they didn't collect from (rake only ever reduces a
+  // winner's payout, it isn't billed to anyone else), their proportional
+  // share of it otherwise. The exact real number Weplay charged, not a
+  // rate/cap formula reconstructed from a rate card — see
+  // distributeRakeReduction's own comment for why that matters (this app
+  // has already observed Weplay change their own rate mid-dataset).
+  const rakePaid = (heroPreRakeCents - Math.round(collected * 100)) / 100;
 
   // Attempt to Steal: exactly RFI (raising into a still-unopened pot),
   // restricted to hero being in CO/BTN/SB — no separate tracking needed,
@@ -551,6 +619,7 @@ function analyzeHand(block, heroNameOverride) {
     handId, bb, stakesLabel: `$${sbStake}/$${bbStake}`, date: `${y}-${mo}-${d}`, time: `${hh.padStart(2, '0')}:${mm}:${ss}`, maxSeats,
     position, isBombPot,
     net: collected - contributed,
+    rakePaid,
     vpip: voluntaryPreflopAction,
     pfr: preflopRaise,
     rfiOpportunity,
@@ -621,6 +690,11 @@ function aggregateStats(allHands) {
   const pct = (count, denom) => (denom > 0 ? (count / denom) * 100 : null);
 
   const totalNet = sum(allHands, (h) => h.net);
+  // Hero's own share of rake, summed the same way totalNet is — every hand
+  // (bomb pots included, same population Winnings itself covers), not just
+  // non-bomb ones. Zero on any hand hero didn't win; see rakePaid's own
+  // comment in analyzeHand for why that's the right scope.
+  const totalRakePaid = sum(allHands, (h) => h.rakePaid || 0);
   const bbWon = sum(allHands, (h) => h.net / h.bb);
   const bb100 = n > 0 ? (bbWon / n) * 100 : null;
 
@@ -924,6 +998,7 @@ function aggregateStats(allHands) {
     bombPotHands: bombCount,
     nonBombPotHands: nonBomb.length,
     netResult: totalNet,
+    totalRakePaid,
     bb100,
     evBb100,
     evAdjustedHandCount,
