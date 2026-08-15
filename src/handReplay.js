@@ -140,6 +140,7 @@ function buildHandReplay(rawBlock, heroNameOverride) {
     name: s.name,
     seat: s.num,
     position: positionByName[s.name] || '—',
+    stackUSD: Math.round(s.stackCents) / 100,
     stackBB: bbRound(s.stackCents, bbCents),
     isHero: s.name === hero,
   }));
@@ -221,10 +222,10 @@ function buildHandReplay(rawBlock, heroNameOverride) {
 
     let m;
     if ((m = RE_FOLD.exec(l))) { active.delete(m[1]); currentStreetActions.push({ text: fmtAction(m[1], 'folds'), isFold: true, player: m[1] }); continue; }
-    if ((m = RE_CHECK.exec(l))) { currentStreetActions.push({ text: `${m[1]} checks`, isFold: false }); continue; }
-    if ((m = RE_CALL.exec(l))) { pot += centsOf(m[2]); currentStreetActions.push({ text: fmtAction(m[1], 'calls', centsOf(m[2]), !!m[3]), isFold: false }); continue; }
-    if ((m = RE_BET.exec(l))) { pot += centsOf(m[2]); currentStreetActions.push({ text: fmtAction(m[1], 'bets', centsOf(m[2]), !!m[3]), isFold: false }); continue; }
-    if ((m = RE_RAISE.exec(l))) { pot += centsOf(m[2]); currentStreetActions.push({ text: fmtAction(m[1], 'raises', centsOf(m[3]), !!m[4]), isFold: false }); continue; }
+    if ((m = RE_CHECK.exec(l))) { currentStreetActions.push({ text: `${m[1]} checks`, isFold: false, player: m[1] }); continue; }
+    if ((m = RE_CALL.exec(l))) { pot += centsOf(m[2]); currentStreetActions.push({ text: fmtAction(m[1], 'calls', centsOf(m[2]), !!m[3]), isFold: false, player: m[1] }); continue; }
+    if ((m = RE_BET.exec(l))) { pot += centsOf(m[2]); currentStreetActions.push({ text: fmtAction(m[1], 'bets', centsOf(m[2]), !!m[3]), isFold: false, player: m[1] }); continue; }
+    if ((m = RE_RAISE.exec(l))) { pot += centsOf(m[2]); currentStreetActions.push({ text: fmtAction(m[1], 'raises', centsOf(m[3]), !!m[4]), isFold: false, player: m[1] }); continue; }
     if ((m = RE_UNCALLED.exec(l))) { pot -= centsOf(m[1]); continue; }
     if ((m = RE_TOTAL_POT.exec(l))) { totalPotLine = m; continue; }
   }

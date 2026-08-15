@@ -12,7 +12,7 @@ const { openDatabase, getSetting, setSetting } = require('./src/db');
 const {
   importFileIntoStore, queryHands, getDistinctValues, getHandById, getConvertedText,
   queryRawHandsForStats, getAllPlayerNames,
-  getTotalHandCount,
+  getTotalHandCount, getQuickPlayerStats,
 } = require('./src/handStore');
 const { migrateJsonStoreIfPresent } = require('./src/migrateJsonStore');
 const { buildHandReplay } = require('./src/handReplay');
@@ -520,6 +520,10 @@ ipcMain.handle('get-hand-detail', async (event, handId, perspectivePlayer, optio
     ...record,
     replay: buildHandReplay(record.raw, perspectivePlayer || null),
   };
+});
+
+ipcMain.handle('get-quick-player-stats', async (event, playerNames) => {
+  return getQuickPlayerStats(getDb(), playerNames);
 });
 
 // ── Hand detail sub-window ───────────────────────────────────────────────

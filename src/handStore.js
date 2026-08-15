@@ -760,6 +760,40 @@ function queryRawHandsForStats(db, filters) {
 }
 
 /**
+ * Lightweight VPIP/PFR/hand-count lookup for a batch of player names at
+ * once — powers the hand-detail replay's per-seat stat column (the
+ * DriveHUD-style "29/21 (316)" readout). Deliberately a raw SQL aggregate
+ * over hand_players rather than analyzeHand/aggregateStats: those exist to
+ * build the full HUD from raw text, which would mean re-parsing every hand
+ * a player has ever been seated in just to show three numbers next to
+ * their name. Bomb pots are excluded from both the numerator and
+ * denominator, matching the same convention aggregateStats uses for
+ * VPIP/PFR everywhere else in the app (see src/stats.js's `nonBomb`).
+ */
+function getQuickPlayerStats(db, playerNames) {
+  const names = [...new Set((playerNames || []).filter(Boolean))];
+  if (names.length === 0) return {};
+  const placeholders = names.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT hp.player_name AS name, COUNT(*) AS hands,
+           SUM(hp.vpip) AS vpipCount, SUM(hp.pfr) AS pfrCount
+    FROM hand_players hp
+    JOIN hands h ON h.hand_id = hp.hand_id
+    WHERE hp.player_name IN (${placeholders}) AND h.skipped = 0 AND h.table_type != 'bombpot'
+    GROUP BY hp.player_name
+  `).all(...names);
+  const result = {};
+  for (const r of rows) {
+    result[r.name] = {
+      hands: r.hands,
+      vpip: r.hands ? Math.round((r.vpipCount / r.hands) * 100) : null,
+      pfr: r.hands ? Math.round((r.pfrCount / r.hands) * 100) : null,
+    };
+  }
+  return result;
+}
+
+/**
  * Fetches one full hand by ID — hand-level fields plus a specific player's
  * row (their position, cards if known, net, etc) — for the detail
  * sub-window. perspectivePlayer selects which seated player's row to use;
@@ -804,5 +838,5 @@ function getHandById(db, handId, perspectivePlayer) {
 module.exports = {
   buildHandRecords, getConvertedText, importFileIntoStore, queryHands, getDistinctValues,
   queryRawHandsForStats, getHandById, getHeroPlayerNames, getAllPlayerNames,
-  getTotalHandCount, backfillDeepStats, backfillEVAdjustments,
+  getTotalHandCount, backfillDeepStats, backfillEVAdjustments, getQuickPlayerStats,
 };

@@ -1354,12 +1354,12 @@ body.col-resizing .col-resize-handle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 17px;
+  min-width: 11.5px;
   height: 20px;
-  padding: 0 2px;
+  padding: 0;
   border-radius: 4px;
   font-weight: 800;
-  font-size: 13px;
+  font-size: 17px;
   line-height: 1;
   color: #fff;
   margin-right: 3px;

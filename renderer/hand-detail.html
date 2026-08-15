@@ -7,8 +7,16 @@
 <link rel="stylesheet" href="hand-detail.css" />
 </head>
 <body class="hand-detail-body">
-  <div class="hand-detail-toolbar">
-    <button id="downloadHandBtn" class="btn btn-ghost btn-tiny">⬇ Download as image</button>
+  <div class="hd-toolbar">
+    <div id="hdToolbarTitle" class="hd-toolbar-title">Loading…</div>
+    <div class="hd-toolbar-actions">
+      <button id="replayHandBtn" class="hd-icon-btn" title="Replay hand (coming soon)" disabled>
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor"><polygon points="6,4 20,12 6,20"></polygon></svg>
+      </button>
+      <button id="downloadHandBtn" class="hd-icon-btn" title="Download as image">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="4" y1="20" x2="20" y2="20"></line></svg>
+      </button>
+    </div>
   </div>
 
   <div id="handFormatted" class="hand-formatted">Loading…</div>
