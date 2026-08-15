@@ -99,6 +99,16 @@ function buildHandRecords(rawBlock, sourceFile, options) {
     // foldedToCBet are flat {FLOP,TURN,RIVER: boolean} objects;
     // checkRaiseByStreet[street] is {opp, cr} — cr is the achieved count.
     const b = (v) => (playerStats ? (v ? 1 : 0) : null);
+    // HUD quick-stats (3-Bet%, Agg%): streetAgg is analyzeHand's raw
+    // per-street {agg, calls, folds, checks} counts — summed across
+    // flop/turn/river here so getQuickPlayerStats can build Agg% with a
+    // plain SQL SUM instead of re-parsing raw text per player. See
+    // src/db.js's hand_players columns for the exact formula this feeds.
+    const streetAgg = playerStats && playerStats.streetAgg;
+    const postflopAggCount = streetAgg ? (streetAgg.FLOP.agg + streetAgg.TURN.agg + streetAgg.RIVER.agg) : null;
+    const postflopAggDenom = streetAgg
+      ? ['FLOP', 'TURN', 'RIVER'].reduce((s, k) => s + streetAgg[k].agg + streetAgg[k].calls + streetAgg[k].folds + streetAgg[k].checks, 0)
+      : null;
     return {
       handId: replay.handId,
       playerName: p.name,
@@ -149,6 +159,9 @@ function buildHandRecords(rawBlock, sourceFile, options) {
       checkRaiseRiver: b(playerStats && playerStats.checkRaiseByStreet && playerStats.checkRaiseByStreet.RIVER.cr > 0),
       wonAtShowdown: b(playerStats && playerStats.wonAtShowdown),
       wonWhenSawFlop: b(playerStats && playerStats.wonWhenSawFlop),
+      facedThreeBetOpportunity: b(playerStats && playerStats.facedThreeBetOpportunity),
+      postflopAggCount,
+      postflopAggDenom,
     };
   });
 
@@ -241,8 +254,9 @@ const UPSERT_PLAYER_SQL = `
      cbet_flop, cbet_turn, cbet_river,
      folded_to_cbet_flop, folded_to_cbet_turn, folded_to_cbet_river,
      check_raise_flop, check_raise_turn, check_raise_river,
-     won_at_showdown, won_when_saw_flop)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     won_at_showdown, won_when_saw_flop,
+     faced_three_bet_opportunity, postflop_agg_count, postflop_agg_denom)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(hand_id, player_name) DO UPDATE SET
     is_hero              = MAX(hand_players.is_hero, excluded.is_hero),
     seat                 = COALESCE(excluded.seat, hand_players.seat),
@@ -281,7 +295,10 @@ const UPSERT_PLAYER_SQL = `
     check_raise_turn     = COALESCE(excluded.check_raise_turn, hand_players.check_raise_turn),
     check_raise_river    = COALESCE(excluded.check_raise_river, hand_players.check_raise_river),
     won_at_showdown      = COALESCE(excluded.won_at_showdown, hand_players.won_at_showdown),
-    won_when_saw_flop    = COALESCE(excluded.won_when_saw_flop, hand_players.won_when_saw_flop)
+    won_when_saw_flop    = COALESCE(excluded.won_when_saw_flop, hand_players.won_when_saw_flop),
+    faced_three_bet_opportunity = COALESCE(excluded.faced_three_bet_opportunity, hand_players.faced_three_bet_opportunity),
+    postflop_agg_count   = COALESCE(excluded.postflop_agg_count, hand_players.postflop_agg_count),
+    postflop_agg_denom   = COALESCE(excluded.postflop_agg_denom, hand_players.postflop_agg_denom)
 `;
 
 /**
@@ -333,6 +350,7 @@ function importFileIntoStore(db, rawText, sourceFile, options, splitHandsFn) {
           p.foldedToCbetFlop, p.foldedToCbetTurn, p.foldedToCbetRiver,
           p.checkRaiseFlop, p.checkRaiseTurn, p.checkRaiseRiver,
           p.wonAtShowdown, p.wonWhenSawFlop,
+          p.facedThreeBetOpportunity, p.postflopAggCount, p.postflopAggDenom,
         );
       }
     }
@@ -597,7 +615,7 @@ function backfillDeepStats(db, analyzeHandFn) {
   const rows = db.prepare(`
     SELECT hp.hand_id AS handId, hp.player_name AS playerName, h.raw_text AS rawText
     FROM hand_players hp JOIN hands h ON h.hand_id = hp.hand_id
-    WHERE (hp.net IS NULL OR hp.saw_flop IS NULL OR hp.rfi IS NULL) AND h.skipped = 0
+    WHERE (hp.net IS NULL OR hp.saw_flop IS NULL OR hp.rfi IS NULL OR hp.postflop_agg_count IS NULL) AND h.skipped = 0
   `).all();
   if (rows.length === 0) return 0;
 
@@ -609,7 +627,8 @@ function backfillDeepStats(db, analyzeHandFn) {
       cbet_flop = ?, cbet_turn = ?, cbet_river = ?,
       folded_to_cbet_flop = ?, folded_to_cbet_turn = ?, folded_to_cbet_river = ?,
       check_raise_flop = ?, check_raise_turn = ?, check_raise_river = ?,
-      won_at_showdown = ?, won_when_saw_flop = ?
+      won_at_showdown = ?, won_when_saw_flop = ?,
+      faced_three_bet_opportunity = ?, postflop_agg_count = ?, postflop_agg_denom = ?
     WHERE hand_id = ? AND player_name = ?
   `);
   db.exec('BEGIN');
@@ -649,6 +668,13 @@ function backfillDeepStats(db, analyzeHandFn) {
         b(analyzed && analyzed.checkRaiseByStreet && analyzed.checkRaiseByStreet.RIVER.cr > 0),
         b(analyzed && analyzed.wonAtShowdown),
         b(analyzed && analyzed.wonWhenSawFlop),
+        b(analyzed && analyzed.facedThreeBetOpportunity),
+        analyzed && analyzed.streetAgg
+          ? analyzed.streetAgg.FLOP.agg + analyzed.streetAgg.TURN.agg + analyzed.streetAgg.RIVER.agg
+          : null,
+        analyzed && analyzed.streetAgg
+          ? ['FLOP', 'TURN', 'RIVER'].reduce((s, k) => s + analyzed.streetAgg[k].agg + analyzed.streetAgg[k].calls + analyzed.streetAgg[k].folds + analyzed.streetAgg[k].checks, 0)
+          : null,
         r.handId, r.playerName,
       );
     }
@@ -776,7 +802,9 @@ function getQuickPlayerStats(db, playerNames) {
   const placeholders = names.map(() => '?').join(', ');
   const rows = db.prepare(`
     SELECT hp.player_name AS name, COUNT(*) AS hands,
-           SUM(hp.vpip) AS vpipCount, SUM(hp.pfr) AS pfrCount
+           SUM(hp.vpip) AS vpipCount, SUM(hp.pfr) AS pfrCount,
+           SUM(hp.three_bet) AS threeBetCount, SUM(hp.faced_three_bet_opportunity) AS threeBetOppCount,
+           SUM(hp.postflop_agg_count) AS aggCount, SUM(hp.postflop_agg_denom) AS aggDenom
     FROM hand_players hp
     JOIN hands h ON h.hand_id = hp.hand_id
     WHERE hp.player_name IN (${placeholders}) AND h.skipped = 0 AND h.table_type != 'bombpot'
@@ -788,6 +816,8 @@ function getQuickPlayerStats(db, playerNames) {
       hands: r.hands,
       vpip: r.hands ? Math.round((r.vpipCount / r.hands) * 100) : null,
       pfr: r.hands ? Math.round((r.pfrCount / r.hands) * 100) : null,
+      threeBet: r.threeBetOppCount ? Math.round((r.threeBetCount / r.threeBetOppCount) * 100) : null,
+      aggPct: r.aggDenom ? Math.round((r.aggCount / r.aggDenom) * 100) : null,
     };
   }
   return result;

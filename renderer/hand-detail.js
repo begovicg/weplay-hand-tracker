@@ -74,9 +74,15 @@ function renderToolbarTitle(replay) {
     + `<span class="hd-toolbar-sep">·</span>Hand #${escapeHtml(replay.handId)}`;
 }
 
+// The HUD stat line: VPIP/PFR/3-Bet/Agg% (hands) — the classic 4-stat HUD
+// readout. Shared between the static player list and the table replayer's
+// seats, both fed the same window.handDetail.getQuickPlayerStats result, so
+// the two views can never disagree.
 function renderQuickStat(stats) {
   if (!stats || !stats.hands) return `<span class="hd-stat-empty">—</span>`;
-  return `${stats.vpip}/${stats.pfr} <small>(${stats.hands})</small>`;
+  const three = stats.threeBet != null ? stats.threeBet : '–';
+  const agg = stats.aggPct != null ? stats.aggPct : '–';
+  return `${stats.vpip}/${stats.pfr}/${three}/${agg} <small>(${stats.hands})</small>`;
 }
 
 function renderPlayers(replay, statsByName) {
@@ -86,11 +92,11 @@ function renderPlayers(replay, statsByName) {
       <span class="hd-col-name">${escapeHtml(p.name)}${p.isHero ? ' <span class="hd-hero-tag">Hero</span>' : ''}</span>
       <span class="hd-col-stack-usd">$${p.stackUSD.toFixed(2)}</span>
       <span class="hd-col-stack-bb">${p.stackBB} BB</span>
-      <span class="hd-col-stat" title="VPIP/PFR (hands)">${renderQuickStat(statsByName[p.name])}</span>
+      <span class="hd-col-stat" title="VPIP/PFR/3-Bet/Agg% (hands)">${renderQuickStat(statsByName[p.name])}</span>
     </div>`).join('');
   return `<div class="hd-players">
     <div class="hd-player-row-head">
-      <span class="hd-col-pos">Pos</span><span class="hd-col-name">Player</span><span class="hd-col-stack-usd">Stack $</span><span class="hd-col-stack-bb">Stack BB</span><span class="hd-col-stat">VPIP/PFR</span>
+      <span class="hd-col-pos">Pos</span><span class="hd-col-name">Player</span><span class="hd-col-stack-usd">Stack $</span><span class="hd-col-stack-bb">Stack BB</span><span class="hd-col-stat">VPIP/PFR/3B/Agg</span>
     </div>
     ${rows}
   </div>`;
@@ -212,7 +218,41 @@ function seatLayoutPositions(n) {
   return positions;
 }
 
-function renderSeat(player, pos, step, replay) {
+// Hand-tuned racetrack layouts for the three sizes Weplay actually deals
+// (6/7/8-max), matching the reference screenshot's real clustering (8-max:
+// 3 seats top / 1 right / 3 bottom / 1 left) rather than an evenly-spaced
+// ellipse — the generic formula above stays as the fallback for any other
+// seat count. Each list is in the same clockwise-from-Hero order
+// orderedSeatsFromHero already produces, Hero always the bottom-center (or
+// bottom-center-most) seat.
+const HAND_TUNED_LAYOUTS = {
+  6: [
+    { xPct: 38, yPct: 90 }, { xPct: 62, yPct: 90 },
+    { xPct: 94, yPct: 50 },
+    { xPct: 65, yPct: 10 }, { xPct: 35, yPct: 10 },
+    { xPct: 6, yPct: 50 },
+  ],
+  7: [
+    { xPct: 50, yPct: 91 }, { xPct: 73, yPct: 85 },
+    { xPct: 94, yPct: 50 },
+    { xPct: 65, yPct: 10 }, { xPct: 35, yPct: 10 },
+    { xPct: 6, yPct: 50 },
+    { xPct: 27, yPct: 85 },
+  ],
+  8: [
+    { xPct: 50, yPct: 92 }, { xPct: 73, yPct: 85 },
+    { xPct: 94, yPct: 50 },
+    { xPct: 73, yPct: 13 }, { xPct: 50, yPct: 7 }, { xPct: 27, yPct: 13 },
+    { xPct: 6, yPct: 50 },
+    { xPct: 27, yPct: 85 },
+  ],
+};
+
+function seatLayoutForSize(n) {
+  return HAND_TUNED_LAYOUTS[n] || seatLayoutPositions(n);
+}
+
+function renderSeat(player, pos, step, replay, statsByName) {
   const label = player.isHero ? 'Hero' : player.position;
   const stackBB = step.stacksBB[player.name];
   const isFolded = step.foldedSoFar.includes(player.name);
@@ -229,6 +269,7 @@ function renderSeat(player, pos, step, replay) {
     <div class="hd-seat-label">${escapeHtml(label)}</div>
     ${cardsHtml ? `<div class="hd-seat-cards">${cardsHtml}</div>` : ''}
     <div class="hd-seat-stack">${stackBB} BB</div>
+    <div class="hd-seat-hud">${renderQuickStat(statsByName[player.name])}</div>
   </div>`;
 }
 
@@ -262,12 +303,12 @@ function transportIcon(d) {
   return `<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="${d}"/></svg>`;
 }
 
-function renderReplayTable(replay, labelByName) {
+function renderReplayTable(replay, labelByName, statsByName) {
   const timeline = replay.timeline;
   const step = timeline[stepIndex];
   const ordered = orderedSeatsFromHero(replay.players);
-  const positions = seatLayoutPositions(ordered.length);
-  const seatsHtml = ordered.map((p, i) => renderSeat(p, positions[i], step, replay)).join('');
+  const positions = seatLayoutForSize(ordered.length);
+  const seatsHtml = ordered.map((p, i) => renderSeat(p, positions[i], step, replay, statsByName)).join('');
   const atStart = stepIndex === 0;
   const atEnd = stepIndex === timeline.length - 1;
 
@@ -288,7 +329,7 @@ function renderReplayTable(replay, labelByName) {
 
 function renderCurrentView() {
   if (replayMode && currentReplay && currentReplay.timeline && currentReplay.timeline.length) {
-    handFormatted.innerHTML = renderReplayTable(currentReplay, currentLabelByName);
+    handFormatted.innerHTML = renderReplayTable(currentReplay, currentLabelByName, currentStatsByName);
   } else {
     handFormatted.innerHTML = renderFormatted(currentReplay, currentStatsByName);
   }

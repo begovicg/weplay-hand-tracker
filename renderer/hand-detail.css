@@ -103,7 +103,7 @@
 .hd-player-row-head,
 .hd-player-row {
   display: grid;
-  grid-template-columns: 44px 1fr 68px 72px 76px;
+  grid-template-columns: 44px 1fr 68px 72px 108px;
   align-items: center;
   gap: 8px;
   padding: 4px 10px;
@@ -366,7 +366,7 @@
 .hd-table {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: 9 / 5;
   margin-bottom: 8px;
   flex-shrink: 0;
 }
@@ -374,7 +374,7 @@
 .hd-table::before {
   content: '';
   position: absolute;
-  inset: 9%;
+  inset: 15% 6%;
   border-radius: 50%;
   background: radial-gradient(ellipse at center, var(--bg-panel-3), var(--bg-panel-2));
   border: 1px solid var(--border-soft);
@@ -391,7 +391,7 @@
   background: var(--bg-panel-2);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
-  min-width: 54px;
+  min-width: 76px;
   text-align: center;
   z-index: 1;
 }
@@ -436,6 +436,17 @@
 
 .hd-seat.hero .hd-seat-stack {
   color: var(--text-dim);
+}
+
+.hd-seat-hud {
+  font-size: 9.5px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hd-seat-hud small {
+  color: inherit;
 }
 
 .hd-dealer-badge {

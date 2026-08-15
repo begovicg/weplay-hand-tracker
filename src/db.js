@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS hand_players (
   check_raise_river      INTEGER,
   won_at_showdown        INTEGER,
   won_when_saw_flop      INTEGER,
+  -- HUD quick-stats (see getQuickPlayerStats in handStore.js): the raw
+  -- counts a batched SQL query needs to build 3-Bet% and Agg% without
+  -- re-parsing raw hand text per player. faced_three_bet_opportunity is
+  -- the exact denominator aggregateStats already uses for 3-Bet%;
+  -- postflop_agg_count/postflop_agg_denom are analyzeHand's streetAgg
+  -- (bets+raises, and bets+raises+calls+folds+checks) summed across
+  -- flop/turn/river.
+  faced_three_bet_opportunity INTEGER,
+  postflop_agg_count     INTEGER,
+  postflop_agg_denom     INTEGER,
   PRIMARY KEY (hand_id, player_name)
 ) WITHOUT ROWID;
 
@@ -146,6 +156,7 @@ function openDatabase(filePath) {
     'folded_to_cbet_flop', 'folded_to_cbet_turn', 'folded_to_cbet_river',
     'check_raise_flop', 'check_raise_turn', 'check_raise_river',
     'won_at_showdown', 'won_when_saw_flop',
+    'faced_three_bet_opportunity', 'postflop_agg_count', 'postflop_agg_denom',
   ]) {
     ensureColumn(db, 'hand_players', col, 'INTEGER');
   }
