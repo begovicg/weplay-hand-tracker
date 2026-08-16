@@ -131,7 +131,22 @@ function beginLiveSync(folderPath) {
       mainWindow.webContents.send('live-sync-status', { running: true, folderPath, ...totals });
     }
   });
-  liveSyncWorker.on('error', (err) => console.error('Live Sync worker crashed:', err));
+  // Before this fix, a worker crash only ever got logged — liveSyncWorker
+  // stayed set, so get-live-sync-state kept reporting "running: true" and
+  // the UI's badge stayed stuck on "On" forever with nothing actually
+  // watching the folder anymore. Clearing it and pushing a status update
+  // makes a crash visible (badge flips to Off, an error line appears)
+  // instead of silently doing nothing for the rest of the session.
+  liveSyncWorker.on('error', (err) => {
+    console.error('Live Sync worker crashed:', err);
+    liveSyncWorker = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('live-sync-status', {
+        running: false, folderPath, added: 0, updated: 0, skipped: 0, filesProcessed: 0,
+        errors: [`Live Sync stopped unexpectedly: ${err.message}`],
+      });
+    }
+  });
 }
 
 function resumeLiveSyncIfEnabled() {
@@ -456,6 +471,39 @@ ipcMain.handle('get-live-sync-state', async () => {
     running: liveSyncWorker !== null,
     folderPath: getSetting(database, 'liveSyncFolder'),
   };
+});
+
+// The Refresh Now button's actual "go check the folder right now" request
+// — distinct from a plain UI re-fetch (query-hands etc. against whatever's
+// already in the database), this asks the running Live Sync worker to
+// scan immediately rather than wait for the next fs.watch event or its 1s
+// debounce, and awaits its reply before resolving, so the renderer's own
+// refresh-the-UI step afterward is guaranteed to see anything this scan
+// just imported. A generous timeout guards against a worker that's wedged
+// or already dead without an 'error' event having fired yet — the
+// renderer still falls back to a plain UI refresh either way.
+ipcMain.handle('rescan-live-sync-now', async () => {
+  if (!liveSyncWorker) return { triggered: false };
+  const worker = liveSyncWorker;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      worker.off('message', onMessage);
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const onMessage = (msg) => {
+      if (msg && msg.phase === 'rescanComplete') {
+        const { phase, ...totals } = msg;
+        finish({ triggered: true, ...totals });
+      }
+    };
+    const timer = setTimeout(() => finish({ triggered: false, timedOut: true }), 30000);
+    worker.on('message', onMessage);
+    worker.postMessage({ type: 'rescan' });
+  });
 });
 
 // Exports whatever the shared filter bar currently matches, straight from

@@ -271,17 +271,23 @@ liveSyncToggleBtn.addEventListener('click', async () => {
   }
 });
 
-// A manual escape hatch alongside the automatic refresh below — the
-// automatic one only fires from an actual Live Sync push event, so if
-// you're sitting on a tab that isn't re-fetching on its own for any reason
-// (or just want to double-check right now rather than wait), this forces
-// the same Hands/Stats/Graph refresh on demand.
+// Actually checks the Live Sync folder for new/changed files right now
+// (bypassing fs.watch's 1s debounce, and covering the case where a change
+// was somehow missed entirely) before refreshing the Hands/Stats/Graph —
+// a plain UI re-fetch alone can't surface anything Live Sync hasn't
+// already imported, which used to be this button's whole behavior.
+// rescanLiveSyncNow() no-ops (triggered: false) when Live Sync isn't
+// running, so this still works as a plain "re-fetch what's already in the
+// database" refresh in that case, same as before.
 liveSyncRefreshNowBtn.addEventListener('click', async () => {
   liveSyncRefreshNowBtn.disabled = true;
   try {
+    const rescan = await window.weplayConverter.rescanLiveSyncNow();
     if (mainState.loaded) await refreshEverything({ quiet: false });
     else await loadHandsAndStats();
-    showToast('Refreshed.');
+    if (rescan && rescan.timedOut) showToast('Refreshed, but the Live Sync check timed out — see the status line above.');
+    else if (rescan && rescan.triggered && rescan.filesProcessed > 0) showToast(`Refreshed — found ${rescan.filesProcessed} changed file(s).`);
+    else showToast('Refreshed.');
   } catch (err) {
     console.error('Manual refresh failed:', err);
     showToast('Refresh failed — see the console for details.');

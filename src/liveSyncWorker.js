@@ -30,6 +30,18 @@ const { openDatabase } = require('./db');
 const { startLiveSync } = require('./liveSync');
 
 const db = openDatabase(workerData.dbPath);
-startLiveSync(db, workerData.folderPath, workerData.options, (totals) => {
+const stop = startLiveSync(db, workerData.folderPath, workerData.options, (totals) => {
   parentPort.postMessage({ phase: 'update', ...totals });
+});
+
+// An explicit "rescan now" request (main.js's Refresh Now handler) — runs
+// the same scan immediately instead of waiting for the next fs.watch event
+// (or its debounce), and always replies exactly once so the requester
+// knows it actually ran, unlike the 'update' message above which only
+// fires when something changed.
+parentPort.on('message', (msg) => {
+  if (msg && msg.type === 'rescan') {
+    const totals = stop.rescanNow();
+    parentPort.postMessage({ phase: 'rescanComplete', ...totals });
+  }
 });

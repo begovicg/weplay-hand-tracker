@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('weplayConverter', {
   startLiveSync: (folderPath) => ipcRenderer.invoke('start-live-sync', folderPath),
   stopLiveSync: () => ipcRenderer.invoke('stop-live-sync'),
   getLiveSyncState: () => ipcRenderer.invoke('get-live-sync-state'),
+  rescanLiveSyncNow: () => ipcRenderer.invoke('rescan-live-sync-now'),
   // Same one-way push shape as onBackfillStatus above — main.js's
   // liveSync.js watcher reports on its own schedule (whenever a debounced
   // folder rescan actually touches a file), not in response to a request.

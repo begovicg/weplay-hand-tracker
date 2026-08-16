@@ -90,6 +90,7 @@ function startLiveSync(db, folderPath, options, onChange) {
   const runScan = () => {
     const totals = scanAndImport(db, folderPath, seen, options);
     if (totals.filesProcessed > 0 || totals.errors.length > 0) onChange(totals);
+    return totals;
   };
 
   runScan(); // catch-up: import anything already in the folder before we started watching
@@ -100,10 +101,20 @@ function startLiveSync(db, folderPath, options, onChange) {
   });
   watcher.on('error', (err) => onChange({ added: 0, updated: 0, skipped: 0, filesProcessed: 0, errors: [`Watcher error: ${err.message}`] }));
 
-  return function stop() {
+  function stop() {
     clearTimeout(debounceTimer);
     watcher.close();
-  };
+  }
+  // Exposed for an explicit "rescan now" request (a Refresh Now button) —
+  // runs the exact same scan immediately, bypassing the 1s debounce, and
+  // always returns the totals synchronously (scanAndImport is plain
+  // synchronous fs/SQLite I/O), regardless of whether onChange decided
+  // there was anything worth pushing to the UI on its own. Attached to
+  // `stop` rather than changing this function's return shape to an object
+  // — every existing caller/test already treats the return value as
+  // directly callable.
+  stop.rescanNow = runScan;
+  return stop;
 }
 
 module.exports = { scanAndImport, startLiveSync };
