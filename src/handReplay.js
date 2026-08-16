@@ -167,10 +167,25 @@ function buildHandReplay(rawBlock, heroNameOverride) {
     for (const [name, cents] of stackCentsByName) obj[name] = bbRound(cents, bbCents);
     return obj;
   }
+  // Chips still sitting "in front of" a player, not yet swept into the pot
+  // — reset at every street boundary (see the street-marker handling
+  // below). Antes are deliberately excluded: they're a table fee paid
+  // straight into the pot, not a live bet another player can act on, so
+  // they're already part of `pot`/potBB from the very first snapshot.
+  // Blinds ARE included — they're real bets that participate in the
+  // preflop betting exchange, same as any other call/bet/raise.
+  const streetCommittedCents = new Map();
+  if (sbEntry) streetCommittedCents.set(sbEntry.name, (streetCommittedCents.get(sbEntry.name) || 0) + sbEntry.cents);
+  if (bbEntry) streetCommittedCents.set(bbEntry.name, (streetCommittedCents.get(bbEntry.name) || 0) + bbEntry.cents);
+  function snapshotBets() {
+    const obj = {};
+    for (const [name, cents] of streetCommittedCents) obj[name] = bbRound(cents, bbCents);
+    return obj;
+  }
   const timeline = [{
     kind: 'start', street: 'preflop', run: 1,
     potBB: bbRound(pot, bbCents), board: [],
-    stacksBB: snapshotStacks(), foldedSoFar: [],
+    stacksBB: snapshotStacks(), betsBB: snapshotBets(), foldedSoFar: [],
     player: null, actionText: null, isFold: false, isAllIn: false,
   }];
   let liveBoard = [];
@@ -190,7 +205,7 @@ function buildHandReplay(rawBlock, heroNameOverride) {
     timeline.push({
       kind: 'action', street: currentStreetName, run: 1,
       potBB: bbRound(pot, bbCents), board: liveBoard,
-      stacksBB: snapshotStacks(), foldedSoFar: [...foldedNames],
+      stacksBB: snapshotStacks(), betsBB: snapshotBets(), foldedSoFar: [...foldedNames],
       player: name, actionText: text, isFold, isAllIn,
     });
   }
@@ -242,10 +257,14 @@ function buildHandReplay(rawBlock, heroNameOverride) {
         liveBoard = liveBoard.concat(newCards);
         currentStreetName = name.toLowerCase();
       }
+      // Every street boundary sweeps whatever was sitting in front of
+      // players into the pot — betsBB resets to empty for this entry, the
+      // moment a new street's cards are dealt.
+      streetCommittedCents.clear();
       timeline.push({
         kind: 'street', street: name.toLowerCase(), run: isSecond ? 2 : 1,
         potBB: bbRound(pot, bbCents), board: isSecond ? liveBoard2 : liveBoard,
-        stacksBB: snapshotStacks(), foldedSoFar: [...foldedNames],
+        stacksBB: snapshotStacks(), betsBB: snapshotBets(), foldedSoFar: [...foldedNames],
         player: null, actionText: null, isFold: false, isAllIn: false,
       });
       continue;
@@ -287,6 +306,7 @@ function buildHandReplay(rawBlock, heroNameOverride) {
     if ((m = RE_CALL.exec(l))) {
       pot += centsOf(m[2]);
       stackCentsByName.set(m[1], (stackCentsByName.get(m[1]) || 0) - centsOf(m[2]));
+      streetCommittedCents.set(m[1], (streetCommittedCents.get(m[1]) || 0) + centsOf(m[2]));
       const text = fmtAction(m[1], 'calls', centsOf(m[2]), !!m[3]);
       currentStreetActions.push({ text, isFold: false, player: m[1] });
       pushActionStep(m[1], text, false, !!m[3]);
@@ -295,6 +315,7 @@ function buildHandReplay(rawBlock, heroNameOverride) {
     if ((m = RE_BET.exec(l))) {
       pot += centsOf(m[2]);
       stackCentsByName.set(m[1], (stackCentsByName.get(m[1]) || 0) - centsOf(m[2]));
+      streetCommittedCents.set(m[1], (streetCommittedCents.get(m[1]) || 0) + centsOf(m[2]));
       const text = fmtAction(m[1], 'bets', centsOf(m[2]), !!m[3]);
       currentStreetActions.push({ text, isFold: false, player: m[1] });
       pushActionStep(m[1], text, false, !!m[3]);
@@ -305,8 +326,11 @@ function buildHandReplay(rawBlock, heroNameOverride) {
       // Stack decrement uses the increment ($X in "raises $X to $Y"), not
       // the "to" total — $X is the increment over the raiser's own prior
       // contribution this street, a real-data-verified convention (see the
-      // rakePaid tests in test/stats.test.js for the same finding).
+      // rakePaid tests in test/stats.test.js for the same finding). Same
+      // increment feeds streetCommittedCents, so a re-raise's chip pile
+      // correctly ends up at the full "to" total, not the increment alone.
       stackCentsByName.set(m[1], (stackCentsByName.get(m[1]) || 0) - centsOf(m[2]));
+      streetCommittedCents.set(m[1], (streetCommittedCents.get(m[1]) || 0) + centsOf(m[2]));
       const text = fmtAction(m[1], 'raises', centsOf(m[3]), !!m[4]);
       currentStreetActions.push({ text, isFold: false, player: m[1] });
       pushActionStep(m[1], text, false, !!m[4]);
@@ -315,6 +339,7 @@ function buildHandReplay(rawBlock, heroNameOverride) {
     if ((m = RE_UNCALLED.exec(l))) {
       pot -= centsOf(m[1]);
       stackCentsByName.set(m[2], (stackCentsByName.get(m[2]) || 0) + centsOf(m[1]));
+      streetCommittedCents.set(m[2], (streetCommittedCents.get(m[2]) || 0) - centsOf(m[1]));
       continue;
     }
     if ((m = RE_TOTAL_POT.exec(l))) { totalPotLine = m; continue; }
@@ -375,12 +400,17 @@ function buildHandReplay(rawBlock, heroNameOverride) {
   // Two final timeline steps, reusing showdown/winners as already computed
   // above rather than recomputing anything — 'showdown' only when someone
   // actually showed (a walk/everyone-folds hand has no cards to reveal).
+  // The last street's bets never got an explicit street-boundary sweep
+  // (there's no street AFTER the river to trigger one), so sweep them here
+  // — same as every earlier street transition, just triggered by reaching
+  // the end of the hand instead of a new board.
+  streetCommittedCents.clear();
   const finalBoard = liveBoard2 || liveBoard;
   if (showdown.length > 0) {
     timeline.push({
       kind: 'showdown', street: null, run: 1,
       potBB: bbRound(pot, bbCents), board: finalBoard,
-      stacksBB: snapshotStacks(), foldedSoFar: [...foldedNames],
+      stacksBB: snapshotStacks(), betsBB: snapshotBets(), foldedSoFar: [...foldedNames],
       player: null, actionText: null, isFold: false, isAllIn: false,
     });
   }
@@ -395,7 +425,7 @@ function buildHandReplay(rawBlock, heroNameOverride) {
   timeline.push({
     kind: 'result', street: null, run: 1,
     potBB: bbRound(pot, bbCents), board: finalBoard,
-    stacksBB: snapshotStacks(), foldedSoFar: [...foldedNames],
+    stacksBB: snapshotStacks(), betsBB: snapshotBets(), foldedSoFar: [...foldedNames],
     player: null, actionText: null, isFold: false, isAllIn: false,
   });
 

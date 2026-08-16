@@ -74,15 +74,16 @@ function renderToolbarTitle(replay) {
     + `<span class="hd-toolbar-sep">·</span>Hand #${escapeHtml(replay.handId)}`;
 }
 
-// The HUD stat line: VPIP/PFR/3-Bet/Agg% (hands) — the classic 4-stat HUD
-// readout. Shared between the static player list and the table replayer's
-// seats, both fed the same window.handDetail.getQuickPlayerStats result, so
-// the two views can never disagree.
+// The HUD stat line: VPIP/PFR/3-Bet (hands). Shared between the static
+// player list and the table replayer's seats, both fed the same
+// window.handDetail.getQuickPlayerStats result, so the two views can never
+// disagree. Agg% was dropped from this line (not informative enough to
+// earn the space, and threw off the seat/row alignment) — still computed
+// and stored (src/handStore.js's getQuickPlayerStats), just not displayed.
 function renderQuickStat(stats) {
   if (!stats || !stats.hands) return `<span class="hd-stat-empty">—</span>`;
   const three = stats.threeBet != null ? stats.threeBet : '–';
-  const agg = stats.aggPct != null ? stats.aggPct : '–';
-  return `${stats.vpip}/${stats.pfr}/${three}/${agg} <small>(${stats.hands})</small>`;
+  return `${stats.vpip}/${stats.pfr}/${three} <small>(${stats.hands})</small>`;
 }
 
 function renderPlayers(replay, statsByName) {
@@ -92,11 +93,11 @@ function renderPlayers(replay, statsByName) {
       <span class="hd-col-name">${escapeHtml(p.name)}${p.isHero ? ' <span class="hd-hero-tag">Hero</span>' : ''}</span>
       <span class="hd-col-stack-usd">$${p.stackUSD.toFixed(2)}</span>
       <span class="hd-col-stack-bb">${p.stackBB} BB</span>
-      <span class="hd-col-stat" title="VPIP/PFR/3-Bet/Agg% (hands)">${renderQuickStat(statsByName[p.name])}</span>
+      <span class="hd-col-stat" title="VPIP/PFR/3-Bet (hands)">${renderQuickStat(statsByName[p.name])}</span>
     </div>`).join('');
   return `<div class="hd-players">
     <div class="hd-player-row-head">
-      <span class="hd-col-pos">Pos</span><span class="hd-col-name">Player</span><span class="hd-col-stack-usd">Stack $</span><span class="hd-col-stack-bb">Stack BB</span><span class="hd-col-stat">VPIP/PFR/3B/Agg</span>
+      <span class="hd-col-pos">Pos</span><span class="hd-col-name">Player</span><span class="hd-col-stack-usd">Stack $</span><span class="hd-col-stack-bb">Stack BB</span><span class="hd-col-stat">VPIP/PFR/3B</span>
     </div>
     ${rows}
   </div>`;
@@ -205,11 +206,18 @@ function orderedSeatsFromHero(players) {
   return ordered;
 }
 
+// Angle INCREASES with seat index here, not decreases — on screen (y grows
+// downward), sweeping from the bottom (90°) toward 180° moves left first,
+// which is the true clockwise direction as drawn (picture a clock hand at
+// 6 o'clock sweeping toward 7, 8, 9 — i.e. left — not backward toward 5,
+// 4, 3). Subtracting instead of adding here was a real bug: it drew seat
+// order 1, 2, 3... to the right of Hero, so a hero-is-SB hand showed BB on
+// Hero's right instead of left. Verified against real hands after fixing.
 function seatLayoutPositions(n) {
   const rx = 44, ry = 40;
   const positions = [];
   for (let i = 0; i < n; i++) {
-    const angle = (Math.PI / 2) - (i * 2 * Math.PI / n); // start at bottom, clockwise
+    const angle = (Math.PI / 2) + (i * 2 * Math.PI / n);
     positions.push({
       xPct: 50 + rx * Math.cos(angle),
       yPct: 50 + ry * Math.sin(angle),
@@ -224,27 +232,29 @@ function seatLayoutPositions(n) {
 // ellipse — the generic formula above stays as the fallback for any other
 // seat count. Each list is in the same clockwise-from-Hero order
 // orderedSeatsFromHero already produces, Hero always the bottom-center (or
-// bottom-center-most) seat.
+// bottom-center-most) seat — index 1 (the next seat clockwise, i.e. the
+// next to act) is on Hero's LEFT (mirrors seatLayoutPositions' own fix
+// above, for the same real bug).
 const HAND_TUNED_LAYOUTS = {
   6: [
-    { xPct: 38, yPct: 90 }, { xPct: 62, yPct: 90 },
-    { xPct: 94, yPct: 50 },
-    { xPct: 65, yPct: 10 }, { xPct: 35, yPct: 10 },
+    { xPct: 62, yPct: 90 }, { xPct: 38, yPct: 90 },
     { xPct: 6, yPct: 50 },
+    { xPct: 35, yPct: 10 }, { xPct: 65, yPct: 10 },
+    { xPct: 94, yPct: 50 },
   ],
   7: [
-    { xPct: 50, yPct: 91 }, { xPct: 73, yPct: 85 },
-    { xPct: 94, yPct: 50 },
-    { xPct: 65, yPct: 10 }, { xPct: 35, yPct: 10 },
+    { xPct: 50, yPct: 91 }, { xPct: 27, yPct: 85 },
     { xPct: 6, yPct: 50 },
-    { xPct: 27, yPct: 85 },
+    { xPct: 35, yPct: 10 }, { xPct: 65, yPct: 10 },
+    { xPct: 94, yPct: 50 },
+    { xPct: 73, yPct: 85 },
   ],
   8: [
-    { xPct: 50, yPct: 92 }, { xPct: 73, yPct: 85 },
-    { xPct: 94, yPct: 50 },
-    { xPct: 73, yPct: 13 }, { xPct: 50, yPct: 7 }, { xPct: 27, yPct: 13 },
+    { xPct: 50, yPct: 92 }, { xPct: 27, yPct: 85 },
     { xPct: 6, yPct: 50 },
-    { xPct: 27, yPct: 85 },
+    { xPct: 27, yPct: 13 }, { xPct: 50, yPct: 7 }, { xPct: 73, yPct: 13 },
+    { xPct: 94, yPct: 50 },
+    { xPct: 73, yPct: 85 },
   ],
 };
 
@@ -253,10 +263,13 @@ function seatLayoutForSize(n) {
 }
 
 function renderSeat(player, pos, step, replay, statsByName) {
-  const label = player.isHero ? 'Hero' : player.position;
+  const posLabel = player.isHero ? 'Hero' : player.position;
   const stackBB = step.stacksBB[player.name];
   const isFolded = step.foldedSoFar.includes(player.name);
   const isDealer = player.position === 'BTN';
+  // Highlight whoever is actually acting at this step, not a fixed seat —
+  // clears the moment the step moves past them (a fold or otherwise).
+  const isActive = step.kind === 'action' && step.player === player.name;
   const showdownReached = step.kind === 'showdown' || step.kind === 'result';
   const shown = replay.showdown.find((sd) => sd.name === player.name);
 
@@ -264,21 +277,52 @@ function renderSeat(player, pos, step, replay, statsByName) {
   if (player.isHero && replay.heroCards) cardsHtml = renderCards(replay.heroCards);
   else if (showdownReached && shown) cardsHtml = renderCards(shown.cards);
 
-  return `<div class="hd-seat${player.isHero ? ' hero' : ''}${isFolded ? ' folded' : ''}" style="left:${pos.xPct}%; top:${pos.yPct}%;">
+  return `<div class="hd-seat${isActive ? ' active' : ''}${isFolded ? ' folded' : ''}" style="left:${pos.xPct}%; top:${pos.yPct}%;">
     ${isDealer ? '<span class="hd-dealer-badge">D</span>' : ''}
-    <div class="hd-seat-label">${escapeHtml(label)}</div>
+    <div class="hd-seat-label">
+      <span class="hd-seat-pos">${escapeHtml(posLabel)}</span>
+      ${player.isHero ? '' : `<span class="hd-seat-name">${escapeHtml(player.name)}</span>`}
+    </div>
     ${cardsHtml ? `<div class="hd-seat-cards">${cardsHtml}</div>` : ''}
     <div class="hd-seat-stack">${stackBB} BB</div>
     <div class="hd-seat-hud">${renderQuickStat(statsByName[player.name])}</div>
   </div>`;
 }
 
+function chipIcon(extraClass) {
+  return `<span class="hd-chip-icon${extraClass ? ' ' + extraClass : ''}"></span>`;
+}
+
+// The pot text only ever shows chips already swept in — betsBB (rendered
+// separately, in front of each contributing seat) covers the current
+// street's live action, matching the standard replayer convention (Hand2Note,
+// PokerStars, etc.) of not folding live bets into the pot number until the
+// street actually resolves.
 function renderTableCenter(step) {
+  const betsSum = Object.values(step.betsBB).reduce((s, v) => s + v, 0);
+  const potInMiddle = Math.round((step.potBB - betsSum) * 100) / 100;
   const boardHtml = step.board.length ? renderCards(step.board.join(' ')) : '<span class="hd-table-board-empty">Waiting for board…</span>';
   return `<div class="hd-table-center">
     <div class="hd-table-board">${boardHtml}</div>
-    <div class="hd-table-pot">Pot: ${step.potBB} BB</div>
+    <div class="hd-table-pot">${chipIcon()}Pot: ${potInMiddle} BB</div>
   </div>`;
+}
+
+// Chips still sitting in front of a player, not yet swept into the pot —
+// one marker per player with a nonzero betsBB entry at this step,
+// positioned along the line from table-center out to that seat's own
+// {xPct,yPct}, closer to the seat than the center.
+function renderBetMarkers(ordered, positions, step) {
+  const BET_MARKER_FRACTION = 0.58;
+  return ordered.map((p, i) => {
+    const bb = step.betsBB[p.name];
+    if (!bb) return '';
+    const pos = positions[i];
+    const x = 50 + (pos.xPct - 50) * BET_MARKER_FRACTION;
+    const y = 50 + (pos.yPct - 50) * BET_MARKER_FRACTION;
+    const folded = step.foldedSoFar.includes(p.name);
+    return `<div class="hd-bet-marker${folded ? ' folded' : ''}" style="left:${x}%; top:${y}%;">${chipIcon()}${bb} BB</div>`;
+  }).join('');
 }
 
 function stepCaption(step, labelByName, heroName, replay) {
@@ -315,6 +359,7 @@ function renderReplayTable(replay, labelByName, statsByName) {
   return `
     <div class="hd-table">
       ${seatsHtml}
+      ${renderBetMarkers(ordered, positions, step)}
       ${renderTableCenter(step)}
     </div>
     <div class="hd-transport">
