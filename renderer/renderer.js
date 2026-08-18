@@ -283,7 +283,11 @@ liveSyncRefreshNowBtn.addEventListener('click', async () => {
   liveSyncRefreshNowBtn.disabled = true;
   try {
     const rescan = await window.weplayConverter.rescanLiveSyncNow();
-    if (mainState.loaded) await refreshEverything({ quiet: false });
+    // resetPage: true — a deliberate "check for new hands" click should
+    // actually show them, not leave you sitting on whatever page you were
+    // already browsing while newly-imported hands sort to the top (default
+    // sort is newest-first) out of view below page 1.
+    if (mainState.loaded) await refreshEverything({ quiet: false, resetPage: true });
     else await loadHandsAndStats();
     if (rescan && rescan.timedOut) showToast('Refreshed, but the Live Sync check timed out — see the status line above.');
     else if (rescan && rescan.triggered && rescan.filesProcessed > 0) showToast(`Refreshed — found ${rescan.filesProcessed} changed file(s).`);
@@ -354,7 +358,7 @@ function formatBytes(bytes) {
 
 function extractHandIds(content) {
   const ids = [];
-  const re = /Weplay Hand #(\d+)/g;
+  const re = /(?:Weplay|VanillaPoker) Hand #(\d+)/g;
   let m;
   while ((m = re.exec(content))) ids.push(m[1]);
   return ids;
@@ -966,8 +970,16 @@ function buildTimelineChartSvg(timeline) {
   const plotH = height - padT - padB;
 
   const values = timeline.map((t) => t.cumulative);
-  const minV = Math.min(0, ...values);
-  const maxV = Math.max(0, ...values);
+  // Loop, not Math.min/max(0, ...values) — see buildAdvancedTimelineChartSvg's
+  // matching comment: spreading into a call's arguments has a hard engine
+  // limit well within reach of a real per-hand series (this one's per-date,
+  // so far smaller in practice, but there's no reason to leave the same
+  // unsafe pattern sitting right next to the one that actually broke).
+  let minV = 0, maxV = 0;
+  for (const v of values) {
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
+  }
   const range = maxV - minV || 1;
 
   const xFor = (i) => padL + (i / (timeline.length - 1)) * plotW;
@@ -1027,8 +1039,19 @@ function buildAdvancedTimelineChartSvg(timeline, showdownFilter) {
   const nonShowdownValues = timeline.map((t) => t.cumulativeNonShowdown);
   const evValues = timeline.map((t) => t.cumulativeEV);
   const allValues = [...totalValues, ...showdownValues, ...nonShowdownValues, ...evValues];
-  const dataMin = Math.min(0, ...allValues);
-  const dataMax = Math.max(0, ...allValues);
+  // Plain loop, not Math.min(0, ...allValues) — spreading an array into a
+  // call's arguments is limited by the JS engine's max call-stack args
+  // (confirmed in this environment: throws "Maximum call stack size
+  // exceeded" somewhere around ~125,000 elements). allValues.length is 4x
+  // a player's total hand count (four parallel series), so any perspective
+  // player with roughly 31,000+ hands blew this up on every single load —
+  // the real cause behind "the graph just doesn't render for my main
+  // account," not a data or filter problem.
+  let dataMin = 0, dataMax = 0;
+  for (const v of allValues) {
+    if (v < dataMin) dataMin = v;
+    if (v > dataMax) dataMax = v;
+  }
   const yTicks = ChartMath.computeNiceTicks(dataMin, dataMax, 7, 5);
   const axisMin = yTicks[0];
   const axisMax = yTicks[yTicks.length - 1];
@@ -1352,54 +1375,116 @@ handsSortDirBtn.addEventListener('click', () => {
 
 // ── Wiring: any filter change refreshes both stats and the table ────────
 
-async function refreshEverything({ resetPage, quiet } = {}) {
-  externalFilters = currentFilters();
-  if (resetPage) tableState.offset = 0;
-  if (!quiet) setBusy(true, 'Loading…');
-  try {
-    // Keeps the Stakes/Table/Position dropdowns themselves current, not
-    // just the data they filter — without this, a stake that first shows
-    // up well after the app's initial load (e.g. Live Sync importing a
-    // session at a limit you hadn't played before) never appears as an
-    // option, even though hands at that stake are already sitting in the
-    // table right below it. Cheap enough (a plain DISTINCT query) to run
-    // on every refresh, including a routine tab switch, not just explicit
-    // import/restore actions.
-    await refreshFilterOptions();
-    await refreshStats();
-    await loadHandsPage();
-  } catch (err) {
-    // Never fail silently — a refresh that throws partway through is
-    // exactly how these tabs end up stuck showing stale data with no
-    // visible sign anything went wrong. Surface it instead of swallowing it.
-    console.error('Failed to refresh hands/stats:', err);
-    showToast('Something went wrong refreshing this view — try switching tabs, or reload the app.');
-  } finally {
-    if (!quiet) setBusy(false);
-  }
+// Serializes every hands/stats refresh — loadHandsAndStats() (the one-time
+// initial load) and refreshEverything() (every refresh after) — behind one
+// shared FIFO queue, so no two of them ever run their bodies concurrently.
+// Both mutate the same shared, unscoped externalFilters/tableState and the
+// same table DOM with no scoping of their own; running two at once is what
+// silently drops or overwrites the "correct" result with a stale one — the
+// loser isn't necessarily the one that started second, just whichever
+// happens to finish last.
+//
+// This has now surfaced twice under two different trigger pairs, which is
+// why it's a shared queue and not another one-off guard on a single
+// function:
+//   1. Originally: the app's very first load (loadHandsAndStats, which used
+//      to flip mainState.loaded = true before any of its own awaits had
+//      resolved) racing a Live Sync catch-up scan's push notification,
+//      which saw mainState.loaded already true and fired its own
+//      refreshEverything() while the first load was still mid-flight —
+//      "table opens empty for the wrong player, fixes itself the instant
+//      you touch the player dropdown."
+//   2. Then: clicking "Refresh Now" races ITSELF. rescanLiveSyncNow's own
+//      scan (src/liveSync.js's runScan, shared by both the regular
+//      fs.watch path and the explicit rescanNow() this button drives) always
+//      fires onChange — the normal live-sync-status push — whenever it
+//      actually finds something, in addition to replying directly to the
+//      button's own IPC call. So a single successful "Refresh Now" click
+//      produces TWO independent refreshEverything() calls (the button
+//      handler's own, plus onLiveSyncStatus's) racing each other — "new
+//      hands don't show up until I close and reopen the app," even though
+//      Live Sync had already imported them correctly; only the RENDER of
+//      that already-correct data was getting clobbered.
+let refreshQueue = Promise.resolve();
+
+function enqueueRefresh(task) {
+  const result = refreshQueue.then(task, task); // run even if the previous queued task failed
+  // The QUEUE's own continuation must never reject, or every task queued
+  // after a failed one would be skipped entirely — each task already
+  // reports its own errors (see the try/catch/finally in both tasks
+  // below), so the caller-facing `result` promise still rejects normally;
+  // only the internal chain-continuation swallows it.
+  refreshQueue = result.catch(() => {});
+  return result;
 }
 
-async function loadHandsAndStats() {
-  mainState.loaded = true;
-  try {
-    // Player perspective and filters must be resolved BEFORE the first data
-    // fetch — otherwise the very first table/stats render blends every hero
-    // in the database together (only self-correcting once the user touches a
-    // filter) — exactly the multi-hero mixing the perspective selector
-    // exists to prevent in the first place.
-    await refreshPlayerOptions();
+function refreshEverything({ resetPage, quiet } = {}) {
+  return enqueueRefresh(async () => {
     externalFilters = currentFilters();
-    await refreshFilterOptions();
-    initHandsTable();
-    await refreshStats();
-    await loadHandsPage();
-  } finally {
-    // Always clear the boot screen, even if something above threw — a
-    // permanent "Loading your hands…" screen because one of these calls
-    // failed would be a much worse outcome than showing the (now real, if
-    // partially empty) app underneath and letting the user see what broke.
-    bootOverlay.classList.add('hidden');
-  }
+    if (resetPage) tableState.offset = 0;
+    if (!quiet) setBusy(true, 'Loading…');
+    try {
+      // Keeps the Stakes/Table/Position dropdowns themselves current, not
+      // just the data they filter — without this, a stake that first shows
+      // up well after the app's initial load (e.g. Live Sync importing a
+      // session at a limit you hadn't played before) never appears as an
+      // option, even though hands at that stake are already sitting in the
+      // table right below it. Cheap enough (a plain DISTINCT query) to run
+      // on every refresh, including a routine tab switch, not just explicit
+      // import/restore actions.
+      await refreshFilterOptions();
+      await refreshStats();
+      await loadHandsPage();
+    } catch (err) {
+      // Never fail silently — a refresh that throws partway through is
+      // exactly how these tabs end up stuck showing stale data with no
+      // visible sign anything went wrong. Surface it instead of swallowing it.
+      console.error('Failed to refresh hands/stats:', err);
+      showToast('Something went wrong refreshing this view — try switching tabs, or reload the app.');
+    } finally {
+      if (!quiet) setBusy(false);
+    }
+  });
+}
+
+function loadHandsAndStats() {
+  return enqueueRefresh(async () => {
+    try {
+      // Player perspective and filters must be resolved BEFORE the first
+      // data fetch — otherwise the very first table/stats render blends
+      // every hero in the database together (only self-correcting once the
+      // user touches a filter) — exactly the multi-hero mixing the
+      // perspective selector exists to prevent in the first place.
+      await refreshPlayerOptions();
+      externalFilters = currentFilters();
+      await refreshFilterOptions();
+      initHandsTable();
+      await refreshStats();
+      await loadHandsPage();
+    } catch (err) {
+      // Same "never fail silently" reasoning as refreshEverything's own
+      // catch below — this one used to be missing (only a finally), so a
+      // first-load failure (e.g. the buildAdvancedTimelineChartSvg crash
+      // this was added for — see its own comment) surfaced as nothing more
+      // than a permanently-empty table and an unhandled promise rejection
+      // in the console, with no visible sign anything had gone wrong.
+      console.error('Failed to load hands/stats:', err);
+      showToast('Something went wrong loading your hands — try switching tabs, or reload the app.');
+    } finally {
+      // Only set once this — the very first queued task — actually runs,
+      // not synchronously when loadHandsAndStats() is called: a push event
+      // that arrives before its turn in the queue correctly sees "not
+      // loaded yet" and skips firing its own refreshEverything(), since
+      // this same queue will run it (via enqueueRefresh above) right after
+      // this task anyway.
+      mainState.loaded = true;
+      // Always clear the boot screen, even if something above threw — a
+      // permanent "Loading your hands…" screen because one of these calls
+      // failed would be a much worse outcome than showing the (now real, if
+      // partially empty) app underneath and letting the user see what broke.
+      bootOverlay.classList.add('hidden');
+    }
+  });
 }
 
 importDbBtn.addEventListener('click', async () => {
