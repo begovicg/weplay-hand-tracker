@@ -380,6 +380,22 @@ function renderCurrentView() {
   }
 }
 
+// Reveals the (initially hidden — see main.js's open-hand-window) window at
+// a height that fits everything currently rendered in #handFormatted
+// without a scrollbar, up to however much vertical room the screen actually
+// has. Only this renderer knows its own content's natural height, and only
+// the main process knows the screen's — main.js's 'hand-window-fit-content'
+// handler does the actual resizing and show(). Called once per code path
+// through init(), each of which leaves the window hidden until this runs.
+function revealFittedWindow() {
+  // Matches the fudge factor the "download as image" capture below already
+  // uses for the toolbar + body padding sitting above #handFormatted.
+  const contentHeight = handFormatted.scrollHeight + 70;
+  window.handDetail.fitWindowToContent(contentHeight).catch((err) => {
+    console.error('Failed to fit hand window to content:', err);
+  });
+}
+
 async function init() {
   const params = new URLSearchParams(window.location.search);
   const handId = params.get('handId');
@@ -390,6 +406,7 @@ async function init() {
     hdToolbarTitle.textContent = 'No hand ID provided.';
     handFormatted.textContent = 'No hand ID provided.';
     downloadHandBtn.disabled = true;
+    revealFittedWindow();
     return;
   }
 
@@ -398,6 +415,7 @@ async function init() {
     hdToolbarTitle.textContent = `Hand #${handId} not found`;
     handFormatted.textContent = `Hand #${handId} not found in the database.`;
     downloadHandBtn.disabled = true;
+    revealFittedWindow();
     return;
   }
 
@@ -409,6 +427,7 @@ async function init() {
 
   hdToolbarTitle.innerHTML = renderToolbarTitle(record.replay);
   renderCurrentView();
+  revealFittedWindow();
 
   const canReplay = !!(currentReplay && currentReplay.timeline && currentReplay.timeline.length);
   replayHandBtn.disabled = !canReplay;

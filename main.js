@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen } = require('electron');
 const { DatabaseSync } = require('node:sqlite');
 const { Worker } = require('node:worker_threads');
 const path = require('path');
@@ -594,15 +594,21 @@ ipcMain.handle('open-hand-window', async (event, handId, perspectivePlayer) => {
   }
 
   const win = new BrowserWindow({
-    width: 700,
+    width: 560,
     height: 620,
-    minWidth: 480,
+    minWidth: 460,
     minHeight: 420,
     // Matches renderer/style.css's --bg (this window loads style.css too,
     // layered under hand-detail.css) — see createWindow()'s comment above.
     backgroundColor: '#0b0b0c',
     title: `Hand #${handId}`,
     icon: path.join(__dirname, 'build', 'icon.png'),
+    // Not shown until hand-detail.js reports how tall its own content
+    // actually is — see the 'hand-window-fit-content' handler below, which
+    // resizes to that height (capped to the screen) before revealing.
+    // Avoids opening at this fixed 620 default and showing a scrollbar for
+    // hands that would otherwise fit on screen with room to spare.
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'handDetailPreload.js'),
       contextIsolation: true,
@@ -613,6 +619,33 @@ ipcMain.handle('open-hand-window', async (event, handId, perspectivePlayer) => {
   handWindows.set(key, win);
   win.on('closed', () => handWindows.delete(key));
   win.loadFile(path.join(__dirname, 'renderer', 'hand-detail.html'), { query: { handId, perspectivePlayer: perspectivePlayer || '' } });
+});
+
+// Called once hand-detail.js has laid out its content and knows its own
+// natural (unclipped) height — resizes the window to fit that height
+// without a scrollbar, capped to how much vertical room the screen it's on
+// actually has (leaving space for the OS title bar/taskbar, neither of
+// which counts toward content size). A long hand — many streets, a
+// multi-way showdown, run-it-twice — still ends up scrolling past that cap,
+// same as before; a short hand no longer scrolls just because the window
+// opened at an arbitrary fixed height. Also does the window's first
+// show() — see open-hand-window's own comment for why it starts hidden.
+ipcMain.handle('hand-window-fit-content', (event, desiredContentHeight) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return;
+
+  const [width, currentHeight] = win.getContentSize();
+  const display = screen.getDisplayMatching(win.getBounds());
+  const maxHeight = Math.max(420, display.workAreaSize.height - 90);
+  const targetHeight = Math.min(Math.max(Math.ceil(desiredContentHeight) || currentHeight, 420), maxHeight);
+
+  if (targetHeight !== currentHeight) win.setContentSize(width, targetHeight);
+  // Re-centers on whatever display it ends up on — setContentSize alone
+  // keeps the window's original top-left corner fixed and only grows
+  // downward, which could push a taller window's bottom edge off-screen
+  // depending on where Electron initially placed it.
+  win.center();
+  if (!win.isVisible()) win.show();
 });
 
 // Saves the hand-detail window's content as a PNG image — built on
