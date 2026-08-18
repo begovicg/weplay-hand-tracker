@@ -4,7 +4,12 @@ const { translateHandDescription } = require('./handDescriptions');
 
 // ── Regexes for recognizing Weplay lines ────────────────────────────────────
 
-const RE_HEADER = /^Weplay Hand #(\d+):\s+Hold'em No Limit \(\$([0-9.]+)\/\$([0-9.]+)\)\s+-\s+(\d{4})\/(\d{2})\/(\d{2}) (\d{1,2}):(\d{2}):(\d{2}) UTC$/;
+// VanillaPoker is the same underlying network under a different site name —
+// its hand history lines are byte-for-byte identical to Weplay's own aside
+// from that one word (confirmed against real VanillaPoker sample files), so
+// it's recognized and processed through this exact same pipeline rather than
+// needing a separate parser.
+const RE_HEADER = /^(?:Weplay|VanillaPoker) Hand #(\d+):\s+Hold'em No Limit \(\$([0-9.]+)\/\$([0-9.]+)\)\s+-\s+(\d{4})\/(\d{2})\/(\d{2}) (\d{1,2}):(\d{2}):(\d{2}) UTC$/;
 const RE_TABLE = /^Table '(.+?)'\((\d+)\)\s+(\d+)-max(?:\s+\(([^)]*)\))?\s+Seat #(\d+) is the button$/;
 const RE_SEAT = /^Seat (\d+): (.+?) \(\$([0-9.]+) in chips\)$/;
 const RE_ANTE = /^(.+?): posts the ante \$([0-9.]+)(?:\s+and is all-in)?$/;
@@ -777,7 +782,7 @@ function convertHand(block, options) {
 function splitHands(text) {
   // Strip BOM, normalize line endings.
   const clean = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
-  const blocks = clean.split(/(?=^Weplay Hand #)/m);
+  const blocks = clean.split(/(?=^(?:Weplay|VanillaPoker) Hand #)/m);
   return blocks.map((b) => b.trim()).filter(Boolean);
 }
 
@@ -813,7 +818,7 @@ function convertFile(rawText, options) {
     const heroMatch = /Dealt to (.+?) \[/.exec(block);
     if (heroMatch && !detectedHero) detectedHero = heroMatch[1];
 
-    const idMatch = /Weplay Hand #(\d+)/.exec(block);
+    const idMatch = /(?:Weplay|VanillaPoker) Hand #(\d+)/.exec(block);
     const handId = idMatch ? idMatch[1] : null;
 
     const result = convertHand(block, opts);

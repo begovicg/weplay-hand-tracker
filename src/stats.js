@@ -10,7 +10,9 @@ const { splitHands } = require('./converter');
 // (multi-word usernames, "and is all-in" suffixes, single-digit hours) the
 // same fixes already proven in converter.js are mirrored here.
 
-const RE_HEADER = /^Weplay Hand #(\d+):\s+Hold'em No Limit \(\$([0-9.]+)\/\$([0-9.]+)\)\s+-\s+(\d{4})\/(\d{2})\/(\d{2}) (\d{1,2}):(\d{2}):(\d{2})/;
+// VanillaPoker uses the exact same hand history format as Weplay, just under
+// a different site name — see the matching comment in converter.js.
+const RE_HEADER = /^(?:Weplay|VanillaPoker) Hand #(\d+):\s+Hold'em No Limit \(\$([0-9.]+)\/\$([0-9.]+)\)\s+-\s+(\d{4})\/(\d{2})\/(\d{2}) (\d{1,2}):(\d{2}):(\d{2})/;
 const RE_SEAT = /^Seat (\d+): (.+?) \(\$([0-9.]+) in chips\)$/;
 const RE_TABLE = /^Table '.+?'\(\d+\)\s+(\d+)-max/;
 const RE_ANTE = /^(.+?): posts the ante \$([0-9.]+)(?:\s+and is all-in)?$/;

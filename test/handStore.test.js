@@ -822,4 +822,48 @@ test('importFileIntoStore: net/VPIP/PFR for a shared hand agree regardless of wh
   assert.strictEqual(playerA.vpip, 1, 'PlayerA voluntarily called preflop');
 });
 
+// ── VanillaPoker: same underlying network as Weplay, different site name in
+// the header — see the matching comment in src/converter.js. Confirms the
+// whole import pipeline (splitHands -> buildHandRecords -> the hands/
+// hand_players tables) recognizes it exactly like a Weplay file, with no
+// separate handling needed. ─────────────────────────────────────────────
+const HAND_VANILLAPOKER = `VanillaPoker Hand #700:  Hold'em No Limit ($0.25/$0.50) - 2026/08/14 10:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kh]
+PlayerA: calls $0.25
+Hero: checks
+*** FLOP *** [2c 7d 9s]
+Hero: bets $1
+PlayerA: folds
+Uncalled bet ($1) returned to Hero
+*** SHOW DOWN ***
+Hero collected $1 from pot
+*** SUMMARY ***
+Total pot $1 | Rake $0
+Board [2c 7d 9s]
+Seat 1: PlayerA (small blind) folded on the Flop
+Seat 2: Hero (big blind) collected ($1)`;
+
+test('importFileIntoStore: a VanillaPoker-prefixed hand is recognized and saved into the same hands/hand_players tables as a Weplay hand', () => {
+  const { db } = tmpDb();
+  const result = importFileIntoStore(db, HAND_VANILLAPOKER, 'vanillapoker-file.txt', { replaceHeroName: true }, splitHands);
+  assert.strictEqual(result.added, 1);
+  assert.strictEqual(result.skipped, 0);
+
+  const hand = db.prepare('SELECT * FROM hands WHERE hand_id = ?').get('700');
+  assert.ok(hand, 'the VanillaPoker hand should have landed in the hands table');
+  assert.strictEqual(hand.pot_size, 1);
+
+  const hero = db.prepare("SELECT * FROM hand_players WHERE hand_id = '700' AND player_name = 'Hero'").get();
+  assert.ok(hero, 'Hero should have a row in hand_players for this hand');
+  assert.strictEqual(hero.is_hero, 1);
+  assert.strictEqual(hero.hole_cards, 'Ah Kh');
+  assert.strictEqual(hero.won, 1);
+});
+
 console.log(`\n${passed} test(s) passed.`);
