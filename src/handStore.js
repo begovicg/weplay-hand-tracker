@@ -471,11 +471,24 @@ function buildWhereClause(f) {
   if (f.stakesBbMin != null && f.stakesBbMin !== '') { clauses.push('h.bb_stake >= ?'); params.push(parseFloat(f.stakesBbMin)); }
   if (f.stakesBbMax != null && f.stakesBbMax !== '') { clauses.push('h.bb_stake <= ?'); params.push(parseFloat(f.stakesBbMax)); }
 
-  if (f.search) {
-    clauses.push('(h.hand_id LIKE ? OR h.source_file LIKE ? OR hp.hole_cards LIKE ?)');
-    const needle = `%${f.search}%`;
-    params.push(needle, needle, needle);
+  // "Vs Player" — narrows the current perspective's hands down to ones they
+  // played postflop against a specific named opponent: both the perspective
+  // player (hp, already scoped to them above) and the named opponent must
+  // have saw_flop = 1 in the SAME hand. Not restricted to heads-up between
+  // just the two of them — a hand where a third player also saw that flop
+  // still counts, matching the plain-English "hands where I went postflop
+  // with X" rather than a stricter "hands where it was only me and X".
+  if (f.vsPlayer) {
+    clauses.push('hp.saw_flop = 1');
+    clauses.push(`
+      EXISTS (
+        SELECT 1 FROM hand_players hp2
+        WHERE hp2.hand_id = h.hand_id AND hp2.player_name = ? AND hp2.saw_flop = 1
+      )
+    `);
+    params.push(f.vsPlayer);
   }
+
   return { where: clauses.join(' AND '), params };
 }
 
@@ -491,6 +504,7 @@ const SORT_COLUMNS = {
   position: 'hp.position',
   pot: 'h.pot_size',
   wtsd: 'hp.went_to_showdown',
+  starred: 'h.starred',
 };
 
 /**
@@ -516,7 +530,8 @@ function queryHands(db, filters) {
            h.table_type AS tableType, h.table_category AS tableCategory,
            hp.position, hp.hand_category AS handCategory, hp.hole_cards AS heroCards,
            hp.net, h.pot_size AS potSize, hp.went_to_showdown AS wentToShowdown,
-           hp.saw_flop AS sawFlop, hp.won, h.source_file AS sourceFile, h.skipped
+           hp.saw_flop AS sawFlop, hp.won, h.source_file AS sourceFile, h.skipped,
+           h.starred
     FROM hands h JOIN hand_players hp ON hp.hand_id = h.hand_id
     WHERE ${where}
     ORDER BY ${sortCol} ${sortDir}, h.hand_id ${sortDir}
@@ -531,6 +546,7 @@ function queryHands(db, filters) {
     sawFlop: r.sawFlop == null ? null : !!r.sawFlop,
     won: !!r.won,
     skipped: !!r.skipped,
+    starred: !!r.starred,
   }));
 
   return { hands, total, offset, limit };
@@ -862,11 +878,25 @@ function getHandById(db, handId, perspectivePlayer) {
     wentToShowdown: player ? !!player.went_to_showdown : null,
     won: player ? !!player.won : null,
     evAdjustmentBB: player ? player.ev_adjustment_bb : null,
+    starred: !!hand.starred,
   };
+}
+
+/**
+ * Toggles/sets a hand's starred flag — a plain, direct UPDATE, deliberately
+ * NOT routed through UPSERT_HAND_SQL/importFileIntoStore's re-import path
+ * (see the `starred` column's own comment in src/db.js for why: it must
+ * survive re-imports untouched, which is exactly what NOT being part of
+ * that INSERT/UPSERT already guarantees — this is the only code path that
+ * ever changes it).
+ */
+function setHandStarred(db, handId, starred) {
+  db.prepare('UPDATE hands SET starred = ? WHERE hand_id = ?').run(starred ? 1 : 0, handId);
 }
 
 module.exports = {
   buildHandRecords, getConvertedText, importFileIntoStore, queryHands, getDistinctValues,
   queryRawHandsForStats, getHandById, getHeroPlayerNames, getAllPlayerNames,
   getTotalHandCount, backfillDeepStats, backfillEVAdjustments, getQuickPlayerStats,
+  setHandStarred,
 };

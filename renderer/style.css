@@ -1097,9 +1097,68 @@ main {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
 }
 
+/* Player perspective selector — a custom-filtering combobox, not a native
+   <select> or <datalist>: neither of those lets us guarantee "starts with"
+   matching (a native <select>'s own type-ahead jumps/cycles rather than
+   filtering the visible list, and <datalist>'s browser-owned matching isn't
+   controllable at all) — see renderer.js's renderPlayerSearchOptions for
+   the actual prefix-match logic. #filterPlayer itself stays in the DOM as
+   a hidden value-holder so every existing filter/currentFilters()/reset
+   call site that already reads its .value keeps working unchanged; only
+   #filterPlayerSearch is ever visible or focusable. */
+.player-search-wrap {
+  position: relative;
+}
+
 #filterPlayer {
+  display: none;
+}
+
+#filterPlayerSearch {
   font-weight: 700;
   border-color: var(--orange-dim) !important;
+  width: 100%;
+}
+
+.player-search-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.player-search-option {
+  padding: 7px 10px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player-search-option:hover {
+  background: var(--orange-glow);
+}
+
+.player-search-count {
+  color: var(--text-faint);
+  font-weight: 400;
+  margin-left: 5px;
+}
+
+.player-search-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 .filter-field {
@@ -1138,45 +1197,15 @@ main {
 
 .filter-pot-input { width: 80px; }
 
-/* Search collapses to an icon button in the filters bar (keeps the bar to
-   one row) and expands into a small floating popup on click instead of
-   taking up permanent width — see searchToggleBtn/searchPopup in
-   renderer.js. */
-.filter-search-wrap { position: relative; }
-
-.search-toggle-btn {
-  width: 34px;
-  height: 34px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-panel-2);
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: color 0.15s var(--ease), border-color 0.15s var(--ease);
+/* Marks off a filter tacked onto a group it doesn't thematically belong to
+   (currently just Vs Player, parked under C-Bet — see the HTML comment
+   there) — a plain top border rather than a full <hr>, so it reads as "the
+   rest of this card is a separate thing" without adding its own visible
+   line weight competing with the group's own border. */
+.advanced-filters-sep {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 2px;
 }
-
-.search-toggle-btn:hover,
-.search-toggle-btn[aria-expanded="true"] {
-  color: var(--text);
-  border-color: var(--orange-dim);
-}
-
-.search-popup {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 5;
-  background: var(--bg-panel-2);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
-  padding: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-}
-
-.search-popup input { width: 220px; }
 
 /* Advanced Filters panel — collapsed by default, toggled by
    #advancedFiltersToggle (see renderer.js). Grouped like the Advanced Stats
@@ -1337,6 +1366,28 @@ body.col-resizing .col-resize-handle {
 .hands-data-table .wtsd-yes { color: var(--orange-bright); }
 .hands-data-table .wtsd-no { color: var(--text-faint); }
 .hands-data-table .bomb-icon { font-size: 13px; }
+
+/* Star toggle — hollow and faint when unstarred, filled and orange once
+   marked. font-size bumped up from the table's own 12.5px base since a
+   unicode star glyph reads small/thin at that size otherwise. The whole
+   cell (.star-cell), not just the glyph, is the actual click target — see
+   renderHandsRows — so the cursor and hover color both apply cell-wide,
+   matching what's actually clickable rather than just the visible glyph. */
+.hands-data-table td.star-cell {
+  cursor: pointer;
+}
+
+.hands-data-table .hand-star {
+  display: inline-block;
+  font-size: 23px;
+  line-height: 1;
+  color: var(--text-faint);
+  transition: color 0.12s var(--ease), transform 0.12s var(--ease);
+}
+
+.hands-data-table td.star-cell:hover .hand-star { color: var(--orange-dim); }
+.hands-data-table .hand-star.starred { color: var(--orange); }
+.hands-data-table td.star-cell:hover .hand-star.starred { color: var(--orange-bright); }
 
 .hands-table-empty {
   text-align: center !important;

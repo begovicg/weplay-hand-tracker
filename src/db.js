@@ -46,7 +46,19 @@ CREATE TABLE IF NOT EXISTS hands (
   rake            REAL,
   skipped         INTEGER,
   skip_reason     TEXT,
-  raw_text        TEXT
+  raw_text        TEXT,
+  -- Purely local, per-database bookmarking — never derived from a hand's
+  -- own text and never touched by import/UPSERT (see handStore.js's
+  -- UPSERT_HAND_SQL, which deliberately excludes this column from both its
+  -- INSERT list and its ON CONFLICT SET list). Two people's databases can
+  -- legitimately disagree on which of the same shared hand is starred, the
+  -- same way is_hero can legitimately differ per database — and re-syncing
+  -- a hand (Live Sync, a re-import) must never reset an existing star back
+  -- to unstarred. Deliberately excluded from every export path too (raw
+  -- export is verbatim stored text; converted export never reads this
+  -- column) — starring is something you do in this app, not something a
+  -- shared hand history file should carry.
+  starred         INTEGER DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_hands_date ON hands(date);
@@ -160,6 +172,13 @@ function openDatabase(filePath) {
   ]) {
     ensureColumn(db, 'hand_players', col, 'INTEGER');
   }
+  // Same idempotent migration, this time on the hands table — a database
+  // created before starring existed needs this column added explicitly.
+  // The DEFAULT 0 here also backfills every already-existing row to
+  // unstarred (SQLite's ALTER TABLE ADD COLUMN applies a constant default
+  // to existing rows, not just new ones), so nothing ever reads NULL where
+  // a plain 0/1 boolean is expected.
+  ensureColumn(db, 'hands', 'starred', 'INTEGER DEFAULT 0');
   return db;
 }
 

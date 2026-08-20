@@ -12,7 +12,7 @@ const { openDatabase, getSetting, setSetting } = require('./src/db');
 const {
   importFileIntoStore, queryHands, getDistinctValues, getHandById, getConvertedText,
   queryRawHandsForStats, getAllPlayerNames,
-  getTotalHandCount, getQuickPlayerStats,
+  getTotalHandCount, getQuickPlayerStats, setHandStarred,
 } = require('./src/handStore');
 const { migrateJsonStoreIfPresent } = require('./src/migrateJsonStore');
 const { buildHandReplay } = require('./src/handReplay');
@@ -517,13 +517,17 @@ ipcMain.handle('rescan-live-sync-now', async () => {
 // formatted hand viewer) — one combined .txt file either way, multiple
 // hands separated by a blank line, matching the same multi-hand file shape
 // this app already knows how to read back in.
-ipcMain.handle('export-filtered-hands', async (event, filters, format) => {
+ipcMain.handle('export-filtered-hands', async (event, filters, format, options) => {
+  const opts = options || {};
   const database = getDb();
   const rows = queryRawHandsForStats(database, filters || {});
   if (rows.length === 0) return { saved: false, count: 0 };
 
+  // replaceHeroName only ever mattered for the converted branch — raw
+  // export is each hand's original stored text verbatim, and "Hero" is a
+  // CoinPoker-output convention that format never had to begin with.
   const parts = format === 'converted'
-    ? rows.map((r) => getConvertedText(r.rawText, { replaceHeroName: true })).filter(Boolean)
+    ? rows.map((r) => getConvertedText(r.rawText, { replaceHeroName: opts.replaceHeroName !== false })).filter(Boolean)
     : rows.map((r) => r.rawText);
   const combinedText = parts.join('\n\n');
 
@@ -541,6 +545,13 @@ ipcMain.handle('export-filtered-hands', async (event, filters, format) => {
 
 ipcMain.handle('query-hands', async (event, filters) => {
   return queryHands(getDb(), filters);
+});
+
+// Purely local bookmarking — see the `starred` column's own comment in
+// src/db.js for why this never touches export or the import/UPSERT path.
+ipcMain.handle('set-hand-starred', async (event, handId, starred) => {
+  setHandStarred(getDb(), handId, starred);
+  return { ok: true };
 });
 
 ipcMain.handle('get-filter-options', async (event, filters) => {

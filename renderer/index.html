@@ -29,8 +29,12 @@
 
   <section class="filters-bar">
     <div class="filter-field">
-      <label for="filterPlayer">Player</label>
-      <select id="filterPlayer"></select>
+      <label for="filterPlayerSearch">Player</label>
+      <div class="player-search-wrap">
+        <input type="text" id="filterPlayerSearch" autocomplete="off" placeholder="Search player…" />
+        <select id="filterPlayer"></select>
+        <div id="filterPlayerDropdown" class="player-search-dropdown hidden"></div>
+      </div>
     </div>
     <div class="filter-field">
       <label for="filterDateFrom">From</label>
@@ -87,14 +91,6 @@
         <option value="no">No</option>
       </select>
     </div>
-    <div class="filter-field filter-search-wrap">
-      <button type="button" id="searchToggleBtn" class="search-toggle-btn" aria-expanded="false" aria-controls="searchPopup" title="Search hands">
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-      </button>
-      <div id="searchPopup" class="search-popup hidden">
-        <input type="text" id="filterSearch" placeholder="Hand ID, file, cards…" />
-      </div>
-    </div>
     <button id="advancedFiltersToggle" class="btn btn-ghost btn-tiny" aria-expanded="false" aria-controls="advancedFiltersPanel" title="Advanced Filters">Filters ▾</button>
     <button id="filterResetBtn" class="btn btn-ghost btn-tiny" title="Reset filters">Reset</button>
   </section>
@@ -136,6 +132,16 @@
       <div class="filter-field"><label for="filterFoldedToCbetFlop">Fold to Flop C-Bet</label><select id="filterFoldedToCbetFlop"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
       <div class="filter-field"><label for="filterFoldedToCbetTurn">Fold to Turn C-Bet</label><select id="filterFoldedToCbetTurn"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
       <div class="filter-field"><label for="filterFoldedToCbetRiver">Fold to River C-Bet</label><select id="filterFoldedToCbetRiver"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <!-- Doesn't thematically belong under C-Bet — parked here so the panel
+           stays at its established 4-column grid instead of a 5th group
+           wrapping into an awkward half-empty row. Revisit if this filter
+           group grows enough to earn its own column. -->
+      <div class="advanced-filters-sep"></div>
+      <div class="filter-field">
+        <label for="filterVsPlayer">Vs Player</label>
+        <input type="text" id="filterVsPlayer" list="allPlayersDatalist" placeholder="Opponent name…" title="Hands where the selected player and this player both saw the flop together" />
+        <datalist id="allPlayersDatalist"></datalist>
+      </div>
     </div>
 
     <div class="advanced-filters-group">
@@ -200,13 +206,6 @@
       <ul id="fileList" class="file-list hidden"></ul>
     </section>
 
-    <section class="options">
-      <label class="checkbox-row">
-        <input type="checkbox" id="replaceHeroToggle" checked />
-        <span>Replace my username with <code>Hero</code> in the output (matches CoinPoker's own export convention)</span>
-      </label>
-    </section>
-
     <section class="actions">
       <button id="convertBtn" class="btn btn-primary btn-large" disabled>Convert &amp; Save</button>
       <button id="importDbBtn" class="btn btn-secondary btn-large" disabled>Import to Hand Database</button>
@@ -235,6 +234,16 @@
               <option value="converted">CoinPoker format</option>
             </select>
           </div>
+        </div>
+        <div class="options">
+          <label class="checkbox-row">
+            <input type="checkbox" id="exportReplaceHeroToggle" checked />
+            <span>Replace my username with <code>Hero</code> in the output (only applies to the CoinPoker format)</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="exportExcludeBombPotsToggle" checked title="Excludes Bomb Pot hands from this export regardless of the Include BP filter above — uncheck to follow that filter's current Yes/No setting instead" />
+            <span>Exclude Bomb Pot hands in the output</span>
+          </label>
         </div>
         <div class="actions">
           <button id="exportBtn" class="btn btn-secondary btn-large">Export Filtered Hands</button>
@@ -289,12 +298,14 @@
               <option value="pot">Pot</option>
               <option value="net">Net</option>
               <option value="wtsd">WTSD</option>
+              <option value="starred">Starred</option>
             </select>
             <button id="handsSortDirBtn" class="btn btn-ghost btn-tiny" title="Toggle ascending/descending">▼ Descending</button>
           </div>
           <div class="hands-table-wrap">
             <table id="handsTable" class="data-table hands-data-table">
               <colgroup>
+                <col id="colStar" style="width: 92px;">
                 <col id="colDate" style="width: 100px;">
                 <col id="colTime" style="width: 85px;">
                 <col id="colStakes" style="width: 90px;">

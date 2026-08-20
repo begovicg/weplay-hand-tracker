@@ -14,7 +14,6 @@ const fileSummaryToggle = document.getElementById('fileSummaryToggle');
 const clearBtn = document.getElementById('clearBtn');
 const convertBtn = document.getElementById('convertBtn');
 const importDbBtn = document.getElementById('importDbBtn');
-const replaceHeroToggle = document.getElementById('replaceHeroToggle');
 const liveSyncStatusBadge = document.getElementById('liveSyncStatusBadge');
 const liveSyncFolderPath = document.getElementById('liveSyncFolderPath');
 const liveSyncChooseFolderBtn = document.getElementById('liveSyncChooseFolderBtn');
@@ -23,6 +22,8 @@ const liveSyncRefreshNowBtn = document.getElementById('liveSyncRefreshNowBtn');
 const liveSyncStatusText = document.getElementById('liveSyncStatusText');
 const exportCountLabel = document.getElementById('exportCountLabel');
 const exportFormat = document.getElementById('exportFormat');
+const exportReplaceHeroToggle = document.getElementById('exportReplaceHeroToggle');
+const exportExcludeBombPotsToggle = document.getElementById('exportExcludeBombPotsToggle');
 const exportBtn = document.getElementById('exportBtn');
 const backupBtn = document.getElementById('backupBtn');
 const restoreBtn = document.getElementById('restoreBtn');
@@ -73,6 +74,8 @@ const handsDbLabel = document.getElementById('handsDbLabel');
 const handsTableHeadRow = document.getElementById('handsTableHeadRow');
 const handsTableBody = document.getElementById('handsTableBody');
 const filterPlayer = document.getElementById('filterPlayer');
+const filterPlayerSearch = document.getElementById('filterPlayerSearch');
+const filterPlayerDropdown = document.getElementById('filterPlayerDropdown');
 const filterDateFrom = document.getElementById('filterDateFrom');
 const filterDateTo = document.getElementById('filterDateTo');
 const filterPosition = document.getElementById('filterPosition');
@@ -84,9 +87,7 @@ const filterSawFlop = document.getElementById('filterSawFlop');
 const filterPotBbMin = document.getElementById('filterPotBbMin');
 const filterPotBbMax = document.getElementById('filterPotBbMax');
 const filterIncludeBombPots = document.getElementById('filterIncludeBombPots');
-const filterSearch = document.getElementById('filterSearch');
-const searchToggleBtn = document.getElementById('searchToggleBtn');
-const searchPopup = document.getElementById('searchPopup');
+const allPlayersDatalist = document.getElementById('allPlayersDatalist');
 const advancedFiltersToggle = document.getElementById('advancedFiltersToggle');
 const advancedFiltersPanel = document.getElementById('advancedFiltersPanel');
 const filterResetBtn = document.getElementById('filterResetBtn');
@@ -99,6 +100,7 @@ const filterResetBtn = document.getElementById('filterResetBtn');
 // much shorter main filters-bar list above does — with 28 of these, a typo
 // in one of three places would silently desync a filter from its control.
 const ADVANCED_FILTER_FIELDS = [
+  ['vsPlayer', 'filterVsPlayer'],
   ['vpip', 'filterVpip'], ['pfr', 'filterPfr'], ['rfi', 'filterRfi'],
   ['coldCall', 'filterColdCall'], ['limped', 'filterLimped'],
   ['threeBet', 'filterThreeBet'], ['foldedToThreeBet', 'filterFoldedToThreeBet'],
@@ -524,7 +526,10 @@ convertBtn.addEventListener('click', async () => {
   setBusy(true, 'Converting…');
   let results = null;
   try {
-    const options = { replaceHeroName: replaceHeroToggle.checked };
+    // Always Hero, matching CoinPoker's own export convention — no longer
+    // user-configurable here (see exportReplaceHeroToggle for the one place
+    // that option now actually lives, on the Export from Database output).
+    const options = { replaceHeroName: true };
     results = await window.weplayConverter.convertFiles(state.files, options);
     state.results = results;
     renderResults(results);
@@ -696,9 +701,13 @@ function currentFilters() {
     // "Yes", matching every other filter's "no filter applied" shape,
     // since "Yes" is "include everything," the same as not filtering at all.
     includeBombPots: filterIncludeBombPots.value === 'no' ? false : undefined,
-    search: filterSearch.value.trim() || undefined,
   };
-  for (const [key, el] of Object.entries(advancedFilterEls)) filters[key] = el.value || undefined;
+  // Trimmed, not just `|| undefined` — matters for filterVsPlayer (free
+  // text, unlike every other advanced filter's select/number input, where
+  // trimming is a harmless no-op) so a stray leading/trailing space typed
+  // into the opponent-name box doesn't silently turn into a filter that can
+  // never match anything.
+  for (const [key, el] of Object.entries(advancedFilterEls)) filters[key] = (el.value || '').trim() || undefined;
   return filters;
 }
 
@@ -761,6 +770,16 @@ function statCard(label, value, valueClass, sub) {
 // silently blend every hero's results together (e.g. your own stats mixed
 // with a friend's imported hands), which is exactly the trap flagged when
 // multi-player storage was first built.
+//
+// #filterPlayer is a real <select> but never shown — it's kept purely as
+// the value-holder every existing call site (currentFilters(), the
+// auto-refresh `change` listener, reset) already reads/writes, so none of
+// that needed to change. #filterPlayerSearch is the actual visible/typeable
+// control; selecting a name sets #filterPlayer.value and dispatches a
+// synthetic 'change' event on it, which is what actually triggers a refresh
+// — see selectPlayer().
+let allPlayersCache = [];
+
 async function refreshPlayerOptions() {
   // Every recognized player, not just imported heroes — deep stats are
   // computed for every seated player at import time now (see
@@ -769,6 +788,7 @@ async function refreshPlayerOptions() {
   // hands, which in practice is almost always the main user of this
   // install (their own imports vastly outnumber any single opponent's).
   const players = await window.weplayConverter.getAllPlayers();
+  allPlayersCache = players;
   const prevValue = filterPlayer.value;
   filterPlayer.innerHTML = players.map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)} (${p.handCount.toLocaleString()})</option>`).join('');
   if (players.some((p) => p.name === prevValue)) {
@@ -776,7 +796,88 @@ async function refreshPlayerOptions() {
   } else if (players.length) {
     filterPlayer.value = players[0].name; // most hands = default perspective
   }
+  // Keeps the visible search box showing the real current selection — but
+  // never while someone's actively typing in it (a quiet Live Sync refresh
+  // firing mid-search shouldn't yank away what they're in the middle of
+  // typing).
+  if (document.activeElement !== filterPlayerSearch) {
+    filterPlayerSearch.value = filterPlayer.value || '';
+  }
+  // Autocomplete suggestions for the "Vs Player" advanced filter — the same
+  // name list as the dropdown above, just as free-typed suggestions rather
+  // than a closed set, since <input list="..."> still accepts any text
+  // typed (matched against buildWhereClause's exact hp2.player_name = ?, so
+  // getting the spelling right still matters — this is a convenience, not a
+  // hard constraint on what can be typed).
+  allPlayersDatalist.innerHTML = players.map((p) => `<option value="${escapeHtml(p.name)}"></option>`).join('');
 }
+
+// Prefix-only, case-insensitive — deliberately not "contains anywhere":
+// with a big enough opponent pool, a substring match turns "type the start
+// of the name you remember" into scrolling past every name that happens to
+// contain those letters in the middle. An empty query shows everyone,
+// sorted by hand count same as the underlying dropdown always was.
+function renderPlayerSearchOptions(query) {
+  const q = query.trim().toLowerCase();
+  const matches = q ? allPlayersCache.filter((p) => p.name.toLowerCase().startsWith(q)) : allPlayersCache;
+  filterPlayerDropdown.innerHTML = matches.length
+    ? matches.map((p) => `
+        <div class="player-search-option" data-player-name="${escapeHtml(p.name)}">${escapeHtml(p.name)}<span class="player-search-count">(${p.handCount.toLocaleString()})</span></div>
+      `).join('')
+    : '<div class="player-search-empty">No matching players</div>';
+  filterPlayerDropdown.classList.remove('hidden');
+}
+
+function selectPlayer(name) {
+  filterPlayer.value = name;
+  filterPlayerSearch.value = name;
+  filterPlayerDropdown.classList.add('hidden');
+  // Not a real user click on the hidden <select> — dispatched manually so
+  // the exact same listener that already reacts to changing that dropdown
+  // (line ~1660's auto-refresh loop) fires here too, without needing its
+  // own separate handler.
+  filterPlayer.dispatchEvent(new Event('change'));
+}
+
+filterPlayerSearch.addEventListener('focus', () => {
+  filterPlayerSearch.select(); // typing immediately replaces the shown name
+  renderPlayerSearchOptions('');
+});
+
+filterPlayerSearch.addEventListener('input', () => {
+  renderPlayerSearchOptions(filterPlayerSearch.value);
+});
+
+filterPlayerSearch.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const first = filterPlayerDropdown.querySelector('[data-player-name]');
+    if (first) selectPlayer(first.dataset.playerName);
+  } else if (e.key === 'Escape') {
+    filterPlayerSearch.value = filterPlayer.value || '';
+    filterPlayerDropdown.classList.add('hidden');
+    filterPlayerSearch.blur();
+  }
+});
+
+// Losing focus without picking anything (tabbing away, clicking dead space)
+// discards whatever was typed and snaps the visible text back to the real
+// current selection — the search box is a way to CHANGE the selection, not
+// a second place that selection's text lives.
+filterPlayerSearch.addEventListener('blur', () => {
+  filterPlayerDropdown.classList.add('hidden');
+  filterPlayerSearch.value = filterPlayer.value || '';
+});
+
+// mousedown (not click) on the dropdown, preventDefault'd, so clicking an
+// option never actually blurs the search input first — a plain blur
+// listener above would otherwise hide the dropdown (and revert the text)
+// BEFORE the option's own click handler ever got a chance to fire.
+filterPlayerDropdown.addEventListener('mousedown', (e) => e.preventDefault());
+filterPlayerDropdown.addEventListener('click', (e) => {
+  const opt = e.target.closest('[data-player-name]');
+  if (opt) selectPlayer(opt.dataset.playerName);
+});
 
 async function refreshFilterOptions() {
   const opts = await window.weplayConverter.getFilterOptions(externalFilters);
@@ -1181,7 +1282,7 @@ function renderCardBadges(cardsStr) {
   }).join('');
 }
 
-const SORT_LABELS = { date: 'Date', net: 'Net', stakes: 'Stakes', table: 'Table', position: 'Position', pot: 'Pot', wtsd: 'WTSD' };
+const SORT_LABELS = { date: 'Date', net: 'Net', stakes: 'Stakes', table: 'Table', position: 'Position', pot: 'Pot', wtsd: 'WTSD', starred: 'Starred' };
 
 function sortIndicator(field) {
   if (tableState.sortBy !== field) return '';
@@ -1210,7 +1311,20 @@ function setSort(field) {
 // sorting, click-to-open — is DOM/CSS/mouse-events this app can actually
 // verify, unlike the third-party library approach that kept breaking in
 // ways this sandbox has no way to test ahead of time.
+// Purely local bookmarking (src/db.js's `starred` column has the full
+// rationale) — clicking anywhere in this cell toggles it in place via
+// window.weplayConverter.setHandStarred, without navigating into the hand
+// the way clicking anywhere else in the row does. The toggle target is the
+// whole <td> (see renderHandsRows, which tags it with data-star-toggle),
+// not just this glyph — a small unicode star is a fiddly click target to
+// demand precision on while someone's mid-session and glancing between
+// windows, so the entire cell answers for it.
+function renderStarCell(starred) {
+  return `<span class="hand-star${starred ? ' starred' : ''}" title="${starred ? 'Unstar this hand' : 'Star this hand'}">${starred ? '★' : '☆'}</span>`;
+}
+
 const HANDS_COLUMNS = [
+  { key: 'starred', colId: 'colStar', label: 'Mark Hand', align: 'center', sortBy: 'starred', render: renderStarCell },
   { key: 'date', colId: 'colDate', label: 'Date', sortBy: 'date' },
   { key: 'time', colId: 'colTime', label: 'Time' },
   { key: 'stakesLabel', colId: 'colStakes', label: 'Stakes', sortBy: 'stakes', render: (v) => escapeHtml(formatStakesLimit(v)) },
@@ -1283,18 +1397,48 @@ function renderHandsRows(hands) {
   }
   for (const hand of hands) {
     const tr = document.createElement('tr');
-    tr.addEventListener('click', () => {
+    tr.addEventListener('click', (e) => {
+      // A click on the star toggles it in place instead of opening the hand
+      // — checked first so it never falls through to openHandWindow below.
+      const starEl = e.target.closest('[data-star-toggle]');
+      if (starEl) {
+        toggleHandStarred(hand);
+        return;
+      }
       if (hand.handId) window.weplayConverter.openHandWindow(hand.handId, externalFilters.perspectivePlayer);
     });
     for (const col of HANDS_COLUMNS) {
       const td = document.createElement('td');
       if (col.align === 'right') td.classList.add('num');
       if (col.align === 'center') td.classList.add('center');
+      if (col.key === 'starred') {
+        // The whole cell is the click target, not just the glyph inside it
+        // — see renderStarCell's own comment.
+        td.classList.add('star-cell');
+        td.dataset.starToggle = hand.handId;
+      }
       const value = hand[col.key];
-      td.innerHTML = col.render ? col.render(value) : escapeHtml(value != null ? String(value) : '—');
+      td.innerHTML = col.render ? col.render(value, hand) : escapeHtml(value != null ? String(value) : '—');
       tr.appendChild(td);
     }
     handsTableBody.appendChild(tr);
+  }
+}
+
+// Persists the flip, then re-queries the current page so the row reflects
+// the new state (and, if sorted by Starred, its new position) — a full
+// requery rather than a manual DOM patch, matching how every other mutation
+// in this app (import, restore, filter change) already just re-fetches
+// instead of hand-patching the table in place. Cheap enough at this app's
+// scale (see loadHandsPage's own precedent) to not be worth the extra
+// complexity of an optimistic local update.
+async function toggleHandStarred(hand) {
+  try {
+    await window.weplayConverter.setHandStarred(hand.handId, !hand.starred);
+    await loadHandsPage();
+  } catch (err) {
+    console.error('Failed to star/unstar hand:', err);
+    showToast('Could not save that — see the console for details.');
   }
 }
 
@@ -1420,10 +1564,23 @@ function enqueueRefresh(task) {
 
 function refreshEverything({ resetPage, quiet } = {}) {
   return enqueueRefresh(async () => {
-    externalFilters = currentFilters();
     if (resetPage) tableState.offset = 0;
     if (!quiet) setBusy(true, 'Loading…');
     try {
+      // Keeps the Player selector current too, not just the Stakes/Table/
+      // Position dropdowns below — without this, an opponent (or a second
+      // hero) who first appears via a Live Sync import mid-session never
+      // shows up in the dropdown at all, even though their hands are
+      // already sitting in the database and correctly counted everywhere
+      // else that queries fresh (e.g. the hand-detail seat HUD's VPIP/PFR/
+      // hands line) — exactly the "hand detail says 58 hands for this
+      // player but he's not in the list" bug this was added to fix.
+      // Preserves whatever's currently selected (see refreshPlayerOptions'
+      // own prevValue handling), so this is safe on every quiet refresh,
+      // not just explicit import/restore actions — same reasoning as
+      // refreshFilterOptions just below, generalized to this dropdown too.
+      await refreshPlayerOptions();
+      externalFilters = currentFilters();
       // Keeps the Stakes/Table/Position dropdowns themselves current, not
       // just the data they filter — without this, a stake that first shows
       // up well after the app's initial load (e.g. Live Sync importing a
@@ -1490,7 +1647,13 @@ function loadHandsAndStats() {
 importDbBtn.addEventListener('click', async () => {
   setBusy(true, 'Importing to hand database…');
   try {
-    const options = { replaceHeroName: replaceHeroToggle.checked };
+    // buildHandRecords always stores each hand's raw text verbatim — real
+    // names, never Hero-replaced — regardless of this option; it only ever
+    // affects the on-demand converted text a hand-detail view or a later
+    // export might generate from that raw text. No user-facing choice to
+    // make here, so no checkbox for it (see exportReplaceHeroToggle for the
+    // one place that option now actually lives).
+    const options = { replaceHeroName: true };
     const result = await window.weplayConverter.importToHandStore(state.files, options);
     setActiveTab('hands');
     await refreshPlayerOptions();
@@ -1518,7 +1681,15 @@ importDbBtn.addEventListener('click', async () => {
 exportBtn.addEventListener('click', async () => {
   setBusy(true, 'Exporting…');
   try {
-    const result = await window.weplayConverter.exportFilteredHands(externalFilters, exportFormat.value);
+    // Exclude Bomb Pot hands (this export's own checkbox, default checked)
+    // is a force-exclude override on top of whatever the main filter bar's
+    // Include BP toggle currently says — checked always drops bomb pots
+    // from this export regardless of what's shown in the Hands table right
+    // now; unchecked defers back to that filter's own Yes/No setting.
+    const filters = { ...externalFilters };
+    if (exportExcludeBombPotsToggle.checked) filters.includeBombPots = false;
+    const options = { replaceHeroName: exportReplaceHeroToggle.checked };
+    const result = await window.weplayConverter.exportFilteredHands(filters, exportFormat.value, options);
     if (result && result.saved) {
       const formatLabel = exportFormat.value === 'converted' ? 'CoinPoker format' : 'Weplay original format';
       showToast(`Exported ${result.count.toLocaleString()} hand${result.count === 1 ? '' : 's'} in ${formatLabel}.`);
@@ -1584,37 +1755,6 @@ advancedFiltersToggle.addEventListener('click', () => {
   advancedFiltersPanel.classList.toggle('hidden', expanded);
 });
 
-searchToggleBtn.addEventListener('click', (e) => {
-  e.stopPropagation();
-  const opening = searchPopup.classList.contains('hidden');
-  searchPopup.classList.toggle('hidden', !opening);
-  searchToggleBtn.setAttribute('aria-expanded', String(opening));
-  if (opening) filterSearch.focus();
-});
-
-// Closes on outside click and Escape, same as any other transient popover —
-// left open otherwise, it'd sit on top of the filters bar indefinitely.
-document.addEventListener('click', (e) => {
-  if (searchPopup.classList.contains('hidden')) return;
-  if (searchPopup.contains(e.target) || e.target === searchToggleBtn) return;
-  searchPopup.classList.add('hidden');
-  searchToggleBtn.setAttribute('aria-expanded', 'false');
-});
-
-filterSearch.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    searchPopup.classList.add('hidden');
-    searchToggleBtn.setAttribute('aria-expanded', 'false');
-    searchToggleBtn.focus();
-  }
-});
-
-let searchDebounceTimer = null;
-filterSearch.addEventListener('input', () => {
-  clearTimeout(searchDebounceTimer);
-  searchDebounceTimer = setTimeout(() => refreshEverything({ resetPage: true }), 300);
-});
-
 filterResetBtn.addEventListener('click', () => {
   filterDateFrom.value = '';
   filterDateTo.value = '';
@@ -1627,7 +1767,6 @@ filterResetBtn.addEventListener('click', () => {
   filterPotBbMin.value = '';
   filterPotBbMax.value = '';
   filterIncludeBombPots.value = 'yes';
-  filterSearch.value = '';
   for (const el of Object.values(advancedFilterEls)) el.value = '';
   // Player perspective is deliberately NOT reset — clearing it would blend
   // multiple heroes' results together if more than one exists in the

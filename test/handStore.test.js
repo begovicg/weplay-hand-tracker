@@ -8,6 +8,7 @@ const { openDatabase } = require('../src/db');
 const {
   buildHandRecords, importFileIntoStore, queryHands, getDistinctValues, getHandById,
   queryRawHandsForStats, getTotalHandCount, backfillDeepStats, backfillEVAdjustments,
+  setHandStarred,
 } = require('../src/handStore');
 const { splitHands } = require('../src/converter');
 const { analyzeHand } = require('../src/stats');
@@ -81,7 +82,7 @@ Total pot $2 | Rake $0
 Seat 1: Hero (big blind) collected ($2)
 Seat 2: PlayerB (small blind) folded before Flop`;
 
-test('queryHands filters by table category, stakes, date range, and search', () => {
+test('queryHands filters by table category, stakes, and date range', () => {
   const { db } = tmpDb();
   importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}\n\n${HAND_C}`, 'file1.txt', { replaceHeroName: true }, splitHands);
 
@@ -95,10 +96,27 @@ test('queryHands filters by table category, stakes, date range, and search', () 
 
   const byDate = queryHands(db, { dateFrom: '2026-07-06' });
   assert.strictEqual(byDate.total, 2);
+});
 
-  const bySearch = queryHands(db, { search: '100' });
-  assert.strictEqual(bySearch.total, 1);
-  assert.strictEqual(bySearch.hands[0].handId, '100');
+// "Vs Player" — narrows the perspective player's hands to ones they went
+// postflop with a specific named opponent. HAND_A: PlayerA calls preflop,
+// Hero (BB) checks to the flop, PlayerA folds there — both saw_flop = 1.
+// HAND_B and HAND_C both end preflop (a fold with the bet returned
+// uncalled) — no flop is ever dealt in either, so saw_flop is 0 for
+// everyone in both, including Hero.
+test('queryHands vsPlayer: only matches hands where the perspective player AND the named opponent both saw the flop', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}\n\n${HAND_C}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const vsPlayerA = queryHands(db, { vsPlayer: 'PlayerA' });
+  assert.strictEqual(vsPlayerA.total, 1, 'only HAND_A has both Hero and PlayerA reaching the flop together');
+  assert.strictEqual(vsPlayerA.hands[0].handId, '100');
+
+  const vsPlayerB = queryHands(db, { vsPlayer: 'PlayerB' });
+  assert.strictEqual(vsPlayerB.total, 0, 'Hero never saw a flop in either hand PlayerB was seated in');
+
+  const vsNobody = queryHands(db, { vsPlayer: 'NotASeatedPlayer' });
+  assert.strictEqual(vsNobody.total, 0);
 });
 
 test('queryHands paginates via offset/limit and sorts newest-first by default', () => {
@@ -864,6 +882,48 @@ test('importFileIntoStore: a VanillaPoker-prefixed hand is recognized and saved 
   assert.strictEqual(hero.is_hero, 1);
   assert.strictEqual(hero.hole_cards, 'Ah Kh');
   assert.strictEqual(hero.won, 1);
+});
+
+// ── Starred (local bookmark) ─────────────────────────────────────────────
+// New hands default unstarred, setHandStarred flips it, and — the actual
+// point of it being excluded from UPSERT_HAND_SQL entirely — re-importing
+// the exact same hand (the real Live Sync re-sync scenario, since a table's
+// hand history file keeps getting appended to and re-scanned) must never
+// reset an existing star back off.
+
+test('queryHands: a freshly imported hand defaults to unstarred', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+  const { hands } = queryHands(db, {});
+  const hand = hands.find((h) => h.handId === '100');
+  assert.strictEqual(hand.starred, false);
+});
+
+test('setHandStarred: flips the flag, reflected immediately in queryHands', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  setHandStarred(db, '100', true);
+  let hand = queryHands(db, {}).hands.find((h) => h.handId === '100');
+  assert.strictEqual(hand.starred, true);
+
+  setHandStarred(db, '100', false);
+  hand = queryHands(db, {}).hands.find((h) => h.handId === '100');
+  assert.strictEqual(hand.starred, false, 'un-starring should work just as well as starring');
+});
+
+test('setHandStarred: a star survives re-importing the same hand (the real Live Sync re-sync scenario)', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+  setHandStarred(db, '100', true);
+
+  // Simulates Live Sync re-scanning the same still-growing table file and
+  // re-importing a hand it already has — importFileIntoStore's own UPSERT
+  // is idempotent for everything else, and starred must be no exception.
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const hand = queryHands(db, {}).hands.find((h) => h.handId === '100');
+  assert.strictEqual(hand.starred, true, 're-importing the same hand must not reset an existing star');
 });
 
 console.log(`\n${passed} test(s) passed.`);
