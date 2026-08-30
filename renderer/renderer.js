@@ -839,9 +839,26 @@ function selectPlayer(name) {
   filterPlayer.dispatchEvent(new Event('change'));
 }
 
-filterPlayerSearch.addEventListener('focus', () => {
+function openPlayerSearchDropdown() {
   filterPlayerSearch.select(); // typing immediately replaces the shown name
   renderPlayerSearchOptions('');
+}
+
+filterPlayerSearch.addEventListener('focus', openPlayerSearchDropdown);
+
+// The 'focus' event alone isn't enough: it only fires on a genuine
+// unfocused -> focused transition, never when clicking an input that
+// already has focus — and selectPlayer() deliberately keeps focus on this
+// input after a selection (see the dropdown's own mousedown handler below),
+// so clicking right back into the box after picking a player produced no
+// 'focus' event at all, leaving the dropdown stuck closed until focus was
+// lost and regained via some other element first. Re-checking on 'click'
+// covers exactly that gap — gated on the dropdown currently being hidden,
+// so a click made to reposition the cursor while it's already open and
+// mid-search doesn't reset the filter/re-select the text out from under
+// whatever's being typed.
+filterPlayerSearch.addEventListener('click', () => {
+  if (filterPlayerDropdown.classList.contains('hidden')) openPlayerSearchDropdown();
 });
 
 filterPlayerSearch.addEventListener('input', () => {
@@ -988,67 +1005,110 @@ function renderHudTable(stats) {
     return;
   }
 
-  const groups = [
-    {
-      title: 'Preflop',
-      rows: [
-        hudRow('VPIP', fmtPct(stats.vpip), stats.nonBombPotHands, 'pos'),
-        hudRow('PFR', fmtPct(stats.pfr), null, 'pos'),
-        hudRow('RFI', fmtPct(stats.rfi), stats.rfiOppCount, 'pos'),
-        hudRow('Limp', fmtPct(stats.limp), null, 'neutral'),
-        hudRow('Cold Call', fmtPct(stats.coldCall), stats.coldCallOppCount, 'neutral'),
-        hudRow('3-Bet', fmtPct(stats.threeBet), stats.threeBetOppCount, 'pos'),
-        hudRow('Fold to 3-Bet', fmtPct(stats.foldToThreeBet), null, 'neg'),
-        hudRow('4-Bet', fmtPct(stats.fourBet), stats.fourBetOppCount, 'pos'),
-        hudRow('Fold to 4-Bet', fmtPct(stats.foldToFourBet), stats.foldToFourBetOppCount, 'neg'),
-        hudRow('Squeeze', fmtPct(stats.squeeze), stats.squeezeOppCount, 'pos'),
-      ],
-    },
-    {
-      title: 'Steal & Check-Raise',
-      rows: [
-        hudRow('Attempt to Steal', fmtPct(stats.attemptSteal), stats.stealOppCount, 'pos'),
-        hudRow('Fold to Steal', fmtPct(stats.foldToSteal), stats.foldToStealOppCount, 'neg'),
-        hudRow('Flop Check-Raise', fmtPct(stats.flopCheckRaise), stats.flopCheckRaiseOpportunities, 'pos'),
-        hudRow('Turn Check-Raise', fmtPct(stats.turnCheckRaise), stats.turnCheckRaiseOpportunities, 'pos'),
-        hudRow('River Check-Raise', fmtPct(stats.riverCheckRaise), stats.riverCheckRaiseOpportunities, 'pos'),
-      ],
-    },
-    {
-      title: 'C-Bet',
-      rows: [
-        hudRow('Flop C-Bet', fmtPct(stats.flopCbet), stats.flopCbetOpportunities, 'pos'),
-        hudRow('Turn C-Bet', fmtPct(stats.turnCbet), stats.turnCbetOpportunities, 'pos'),
-        hudRow('River C-Bet', fmtPct(stats.riverCbet), stats.riverCbetOpportunities, 'pos'),
-        hudRow('Fold to Flop C-Bet', fmtPct(stats.flopFoldToCbet), stats.flopFoldToCbetOpportunities, 'neg'),
-        hudRow('Fold to Turn C-Bet', fmtPct(stats.turnFoldToCbet), stats.turnFoldToCbetOpportunities, 'neg'),
-        hudRow('Fold to River C-Bet', fmtPct(stats.riverFoldToCbet), stats.riverFoldToCbetOpportunities, 'neg'),
-      ],
-    },
-    {
-      title: 'Aggression & Showdown',
-      rows: [
-        hudRow('Aggression Factor', stats.aggressionFactor != null ? stats.aggressionFactor.toFixed(2) : '—', null, 'neutral'),
-        // AFq (PokerTracker's convention: checks excluded from the
-        // denominator) grouped together, then Agg% (DriveHUD's convention:
-        // checks included) grouped together — same underlying actions, two
-        // different denominators. See the caveat text below the graph for
-        // the full explanation, and streetAggPct in src/stats.js for why
-        // both are shown rather than picking one.
-        hudRow('Flop AFq', fmtPct(stats.flopAggression), stats.flopAggressionOpportunities, 'pos'),
-        hudRow('Turn AFq', fmtPct(stats.turnAggression), stats.turnAggressionOpportunities, 'pos'),
-        hudRow('River AFq', fmtPct(stats.riverAggression), stats.riverAggressionOpportunities, 'pos'),
-        hudRow('Flop Agg%', fmtPct(stats.flopAggPct), stats.flopAggPctOpportunities, 'pos'),
-        hudRow('Turn Agg%', fmtPct(stats.turnAggPct), stats.turnAggPctOpportunities, 'pos'),
-        hudRow('River Agg%', fmtPct(stats.riverAggPct), stats.riverAggPctOpportunities, 'pos'),
-        hudRow('WTSD', fmtPct(stats.wtsd), null, 'neutral'),
-        hudRow('W$SD', fmtPct(stats.wonAtShowdown), null, 'neutral'),
-        hudRow('W$WSF', fmtPct(stats.wonWhenSawFlop), null, 'neutral'),
-      ],
-    },
+  const preflopGroup = {
+    title: 'Preflop',
+    rows: [
+      hudRow('VPIP', fmtPct(stats.vpip), stats.nonBombPotHands, 'pos'),
+      hudRow('PFR', fmtPct(stats.pfr), null, 'pos'),
+      hudRow('RFI', fmtPct(stats.rfi), stats.rfiOppCount, 'pos'),
+      hudRow('Limp', fmtPct(stats.limp), null, 'neutral'),
+      hudRow('Cold Call', fmtPct(stats.coldCall), stats.coldCallOppCount, 'neutral'),
+      hudRow('3-Bet', fmtPct(stats.threeBet), stats.threeBetOppCount, 'pos'),
+      hudRow('Fold to 3-Bet', fmtPct(stats.foldToThreeBet), null, 'neg'),
+      hudRow('4-Bet', fmtPct(stats.fourBet), stats.fourBetOppCount, 'pos'),
+      hudRow('Fold to 4-Bet', fmtPct(stats.foldToFourBet), stats.foldToFourBetOppCount, 'neg'),
+      hudRow('Squeeze', fmtPct(stats.squeeze), stats.squeezeOppCount, 'pos'),
+    ],
+  };
+  const stealCheckRaiseGroup = {
+    title: 'Steal & Check-Raise',
+    rows: [
+      hudRow('Attempt to Steal', fmtPct(stats.attemptSteal), stats.stealOppCount, 'pos'),
+      hudRow('Fold to Steal', fmtPct(stats.foldToSteal), stats.foldToStealOppCount, 'neg'),
+      hudRow('Flop Check-Raise', fmtPct(stats.flopCheckRaise), stats.flopCheckRaiseOpportunities, 'pos'),
+      hudRow('Turn Check-Raise', fmtPct(stats.turnCheckRaise), stats.turnCheckRaiseOpportunities, 'pos'),
+      hudRow('River Check-Raise', fmtPct(stats.riverCheckRaise), stats.riverCheckRaiseOpportunities, 'pos'),
+    ],
+  };
+  const cbetGroup = {
+    title: 'C-Bet',
+    rows: [
+      hudRow('Flop C-Bet', fmtPct(stats.flopCbet), stats.flopCbetOpportunities, 'pos'),
+      hudRow('Turn C-Bet', fmtPct(stats.turnCbet), stats.turnCbetOpportunities, 'pos'),
+      hudRow('River C-Bet', fmtPct(stats.riverCbet), stats.riverCbetOpportunities, 'pos'),
+      hudRow('Fold to Flop C-Bet', fmtPct(stats.flopFoldToCbet), stats.flopFoldToCbetOpportunities, 'neg'),
+      hudRow('Fold to Turn C-Bet', fmtPct(stats.turnFoldToCbet), stats.turnFoldToCbetOpportunities, 'neg'),
+      hudRow('Fold to River C-Bet', fmtPct(stats.riverFoldToCbet), stats.riverFoldToCbetOpportunities, 'neg'),
+    ],
+  };
+  // Float and Probe: PokerTracker's own two distinct stats (confirmed via
+  // its own forums), not one merged "Stab" number — Float is the
+  // in-position, same-street reaction to a missed continuation bet (any
+  // street); Probe is the out-of-position, next-street reaction (turn/
+  // river only, since OOP can't react same-street). See src/stats.js's
+  // Float/Probe comment for the full citation and definitions.
+  const floatProbeGroup = {
+    title: 'Float / Probe',
+    rows: [
+      hudRow('Flop Float', fmtPct(stats.flopFloat), stats.flopFloatOpportunities, 'pos'),
+      hudRow('Turn Float', fmtPct(stats.turnFloat), stats.turnFloatOpportunities, 'pos'),
+      hudRow('River Float', fmtPct(stats.riverFloat), stats.riverFloatOpportunities, 'pos'),
+      hudRow('Turn Probe', fmtPct(stats.turnProbe), stats.turnProbeOpportunities, 'pos'),
+      hudRow('River Probe', fmtPct(stats.riverProbe), stats.riverProbeOpportunities, 'pos'),
+      hudRow('Fold to Flop Float', fmtPct(stats.flopFoldToFloat), stats.flopFoldToFloatOpportunities, 'neg'),
+      hudRow('Fold to Turn Float', fmtPct(stats.turnFoldToFloat), stats.turnFoldToFloatOpportunities, 'neg'),
+      hudRow('Fold to River Float', fmtPct(stats.riverFoldToFloat), stats.riverFoldToFloatOpportunities, 'neg'),
+      hudRow('Fold to Turn Probe', fmtPct(stats.turnFoldToProbe), stats.turnFoldToProbeOpportunities, 'neg'),
+      hudRow('Fold to River Probe', fmtPct(stats.riverFoldToProbe), stats.riverFoldToProbeOpportunities, 'neg'),
+    ],
+  };
+  const barrelsGroup = {
+    title: 'Barrels',
+    rows: [
+      hudRow('Double Barrel', fmtPct(stats.doubleBarrel), stats.doubleBarrelOppCount, 'pos'),
+      hudRow('Triple Barrel', fmtPct(stats.tripleBarrel), stats.tripleBarrelOppCount, 'pos'),
+    ],
+  };
+  const aggressionGroup = {
+    title: 'Aggression & Showdown',
+    rows: [
+      hudRow('Aggression Factor', stats.aggressionFactor != null ? stats.aggressionFactor.toFixed(2) : '—', null, 'neutral'),
+      // AFq (PokerTracker's convention: checks excluded from the
+      // denominator) grouped together, then Agg% (DriveHUD's convention:
+      // checks included) grouped together — same underlying actions, two
+      // different denominators. See the caveat text below the graph for
+      // the full explanation, and streetAggPct in src/stats.js for why
+      // both are shown rather than picking one.
+      hudRow('Flop AFq', fmtPct(stats.flopAggression), stats.flopAggressionOpportunities, 'pos'),
+      hudRow('Turn AFq', fmtPct(stats.turnAggression), stats.turnAggressionOpportunities, 'pos'),
+      hudRow('River AFq', fmtPct(stats.riverAggression), stats.riverAggressionOpportunities, 'pos'),
+      hudRow('Flop Agg%', fmtPct(stats.flopAggPct), stats.flopAggPctOpportunities, 'pos'),
+      hudRow('Turn Agg%', fmtPct(stats.turnAggPct), stats.turnAggPctOpportunities, 'pos'),
+      hudRow('River Agg%', fmtPct(stats.riverAggPct), stats.riverAggPctOpportunities, 'pos'),
+      hudRow('WTSD', fmtPct(stats.wtsd), null, 'neutral'),
+      hudRow('W$SD', fmtPct(stats.wonAtShowdown), null, 'neutral'),
+      hudRow('W$WSF', fmtPct(stats.wonWhenSawFlop), null, 'neutral'),
+    ],
+  };
+
+  // 6 section boxes laid out across a fixed 4-column grid. Float/Probe gets
+  // its own column — real HUDs (e.g. Hold'em Manager 3's dedicated
+  // Float/Probe panel) keep it separate from both C-Bet and Steal/Check-
+  // Raise, so it doesn't get folded into either here either. The other 3
+  // columns: Preflop stands alone (already the largest section); the
+  // remaining 4 sections pair up by row-count balance — Aggression &
+  // Showdown with Barrels (barreling repeatedly IS sustained aggression),
+  // C-Bet with Steal & Check-Raise (both "taking postflop/preflop
+  // initiative" reads) — landing all 4 columns within 1-2 rows of each
+  // other in height instead of one column towering over the rest.
+  const columns = [
+    [preflopGroup],
+    [aggressionGroup, barrelsGroup],
+    [cbetGroup, stealCheckRaiseGroup],
+    [floatProbeGroup],
   ];
 
-  hudTable.innerHTML = groups.map((g) => `
+  const renderGroup = (g) => `
     <div class="hud-group">
       <h3 class="hud-group-title">${escapeHtml(g.title)}</h3>
       <div class="hud-rows">
@@ -1059,6 +1119,12 @@ function renderHudTable(stats) {
           </div>
         `).join('')}
       </div>
+    </div>
+  `;
+
+  hudTable.innerHTML = columns.map((col) => `
+    <div class="hud-column">
+      ${col.map(renderGroup).join('')}
     </div>
   `).join('');
 }

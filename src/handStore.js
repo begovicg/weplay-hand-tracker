@@ -399,13 +399,11 @@ function buildWhereClause(f) {
   if (f.handCategory) { clauses.push('hp.hand_category = ?'); params.push(f.handCategory); }
   // Three-way, not a checkbox: "shown" / "not-shown" / anything else (both,
   // no filter). hp.went_to_showdown is "reached a genuine 2+-way showdown"
-  // (src/stats.js's reachedShowdown) — the standard WTSD definition, and
-  // the same one the WTSD% stat itself uses. Deliberately NOT "were this
-  // player's cards literally shown" (src/stats.js's heroCardsShown, used
-  // for the separate Advanced Graph blue/red split) — a hand can reach a
-  // real showdown and still have the loser muck without revealing, so that
-  // definition used to undercount real showdowns here, which is exactly
-  // why filtering to "not-shown" could still show a nonzero WTSD% above it.
+  // (src/stats.js's reachedShowdown) — the standard WTSD definition, the
+  // same one the WTSD% stat itself uses, and, since it also now drives the
+  // Advanced Graph's showdown/non-showdown split (see that same
+  // reachedShowdown comment in stats.js), the same one that split uses too
+  // — both agree on what "showdown" means here, not two different signals.
   if (f.wentToShowdown === 'shown') { clauses.push('hp.went_to_showdown = 1'); }
   else if (f.wentToShowdown === 'not-shown') { clauses.push('hp.went_to_showdown = 0'); }
   // Saw Flop — three-way, same "both / yes / no" shape as the showdown

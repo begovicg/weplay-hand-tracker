@@ -596,12 +596,15 @@ main {
 }
 
 /* Advanced Stats tab — HUD table: a Dojson-HUD-style grouped breakdown of
-   every stat stats.js computes. See renderer.js's renderHudTable. Exactly
-   4 groups now (Steal and Check-Raise share one column) — a fixed 4-column
-   grid instead of the previous auto-fit, so the count stays a deliberate 4
-   across instead of however many 230px tiles happen to fit. Collapses to 2
-   under 900px (the same breakpoint .stats-overview-grid already uses) so 4
-   real columns don't get squeezed illegibly narrow on a smaller window. */
+   every stat stats.js computes. See renderer.js's renderHudTable. 6 section
+   boxes (.hud-group) laid out across a fixed 4-column grid instead of the
+   previous auto-fit, so the count stays a deliberate 4 across instead of
+   however many 230px tiles happen to fit — two of the 4 columns stack a
+   pair of related .hud-group boxes inside a .hud-column wrapper, using the
+   exact same gap as between columns, so a stacked column's internal
+   spacing matches the grid's own rhythm. Collapses to 2 under 900px (the
+   same breakpoint .stats-overview-grid already uses) so 4 real columns
+   don't get squeezed illegibly narrow on a smaller window. */
 .hud-section {
   background: var(--bg-panel);
   border: 1px solid var(--border-soft);
@@ -622,6 +625,12 @@ main {
 
 @media (max-width: 900px) {
   .hud-table { grid-template-columns: repeat(2, 1fr); }
+}
+
+.hud-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .hud-group {
@@ -1078,7 +1087,7 @@ main {
 .filters-bar {
   display: grid;
   grid-template-columns:
-    1.3fr 130px 130px 1fr 1fr 0.9fr 1.6fr 1fr 0.9fr 0.8fr auto auto auto;
+    2fr 130px 130px 1fr 1fr 0.9fr 1.6fr 1fr 0.9fr 0.8fr auto auto auto;
   align-items: end;
   gap: 14px;
   background: var(--bg-panel);
@@ -1108,6 +1117,8 @@ main {
    #filterPlayerSearch is ever visible or focusable. */
 .player-search-wrap {
   position: relative;
+  width: 100%;
+  display: block;
 }
 
 #filterPlayer {
@@ -1118,6 +1129,24 @@ main {
   font-weight: 700;
   border-color: var(--orange-dim) !important;
   width: 100%;
+  box-sizing: border-box;
+  /* Room for .player-search-arrow so typed text never runs under it. */
+  padding-right: 26px !important;
+}
+
+/* A plain ▾ glyph, matching this app's own convention for every other
+   dropdown-style affordance (Filters ▾/▴, sort ▲/▼) — restores the visual
+   "this is a dropdown" cue a native <select> gave for free.
+   pointer-events: none so clicks pass straight through to the input
+   underneath instead of landing on the glyph. */
+.player-search-arrow {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  color: var(--text-faint);
+  font-size: 11px;
+  pointer-events: none;
 }
 
 .player-search-dropdown {

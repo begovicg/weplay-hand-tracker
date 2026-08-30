@@ -28,17 +28,6 @@ const RE_RAISE = /^(.+?): raises \$([0-9.]+) to \$([0-9.]+)(\s+and is all-in)?$/
 const RE_UNCALLED = /^Uncalled bet \(\$([0-9.]+)\) returned to (.+)$/;
 const RE_COLLECTED = /^(.+?) collected \$([0-9.]+) from (?:pot|main pot|side pot(?:-\d+)?)$/;
 const RE_TOTAL_POT = /^Total pot \$([0-9.]+)(?:\s+Main pot \$([0-9.]+)\.((?:\s+Side pot(?:-\d+)? \$[0-9.]+\.)*))?\s*\|\s*Rake \$([0-9.]+)\s*$/;
-const RE_SHOWS = /^(.+?): shows \[(.*?)\] \((.+?)\)$/;
-// Same guard used in src/handReplay.js's showdown detection — excludes the
-// known Weplay quirk where a folded/losing player's cards get shown as
-// redacted placeholders (e.g. "[]" or "[## 5c]") rather than real cards.
-// Kept in sync deliberately: these two modules independently detect "were
-// this player's cards genuinely shown", and a real discrepancy between them
-// (this exact check being present in one but not the other) was found and
-// fixed while wiring up the Advanced Graph's showdown/non-showdown split.
-function hasValidCards(str) {
-  return /^[2-9TJQKA][cdhs](\s+[2-9TJQKA][cdhs])*$/i.test((str || '').trim());
-}
 
 // A real Weplay quirk, confirmed against real data: every "X collected $Y
 // from pot" line states the PRE-rake amount (equal to the hand's stated
@@ -288,13 +277,6 @@ function analyzeHand(block, heroNameOverride) {
   let limped = false; // entered the pot via a call while the pot was still unraised (preflopRaiseCount === 0)
   let sawFlop = false;
   let reachedShowdown = false; // genuine multi-way contest, not just the header text
-  // Distinct from reachedShowdown: a hand can structurally reach a genuine
-  // showdown and still have hero muck without revealing (very common when
-  // hero has the losing hand — no reason to show a loser). Confirmed as a
-  // real, meaningful difference against real data: 1512 hands reach a
-  // genuine showdown, but hero's cards are only literally shown in 1232 of
-  // them — 312 real cases, essentially all losses where hero mucked.
-  let heroCardsShown = false;
   let inHandThisFar = true;
   let postflopAggressive = 0; // hero's bets + raises, flop/turn/river
   let postflopCalls = 0;
@@ -347,6 +329,41 @@ function analyzeHand(block, heroNameOverride) {
   const cbetMade = { FLOP: false, TURN: false, RIVER: false };
   const facedCBetOpportunity = { FLOP: false, TURN: false, RIVER: false };
   const foldedToCBet = { FLOP: false, TURN: false, RIVER: false };
+  // Float and Probe Bet: PokerTracker's own two distinct stats for betting
+  // into a street where the "due" continuation bettor (the previous
+  // street's aggressor) checked back instead — confirmed via PT4's own
+  // forums (pt4.pokertracker.com "Cbet, Donk, Float & Probe Bets" and
+  // pokertracker.com "Interpretation of stats Probe and Float"), not
+  // merged into one number the way this app originally shipped it: Float
+  // is the IN-POSITION player betting the SAME street right after the due
+  // bettor checks (possible on any street, since acting later than the
+  // checker within one betting round just means being in position that
+  // hand); Probe is the OUT-OF-POSITION player betting the NEXT street,
+  // since OOP acts first and can't react same-street — only possible on
+  // turn/river, never flop (there's no "street before" the flop to have
+  // checked through). "Stab" (this app's original name) turned out to be
+  // informal player slang some forum posters use for "Float and Probe
+  // added together," not an official tracker stat.
+  //
+  // missedCbetThisStreet/streetWasBet/streetDueBettor below are all
+  // HAND-scoped, not tied to whichever player this call is analyzing —
+  // detecting "the due bettor checked" or "nobody bet this street at all"
+  // doesn't depend on who hero is. floatOpportunity/floatMade/
+  // facedFloatOpportunity/foldedToFloat and probeOpportunity/probeMade/
+  // facedProbeOpportunity/foldedToProbe ARE hero-scoped, mirroring
+  // cbetOpportunity/cbetMade/facedCBetOpportunity/foldedToCBet exactly.
+  const missedCbetThisStreet = { FLOP: false, TURN: false, RIVER: false };
+  const streetWasBet = { FLOP: false, TURN: false, RIVER: false }; // did ANYONE bet/raise this street, by the time it ended
+  const streetDueBettor = { FLOP: null, TURN: null, RIVER: null }; // snapshot of previousStreetAggressor at this street's own start
+  const PRIOR_STREET = { TURN: 'FLOP', RIVER: 'TURN' }; // flop has no prior postflop street, so no flop probe exists
+  const floatOpportunity = { FLOP: false, TURN: false, RIVER: false };
+  const floatMade = { FLOP: false, TURN: false, RIVER: false };
+  const facedFloatOpportunity = { FLOP: false, TURN: false, RIVER: false };
+  const foldedToFloat = { FLOP: false, TURN: false, RIVER: false };
+  const probeOpportunity = { TURN: false, RIVER: false };
+  const probeMade = { TURN: false, RIVER: false };
+  const facedProbeOpportunity = { TURN: false, RIVER: false };
+  const foldedToProbe = { TURN: false, RIVER: false };
   let preflopRaiseCount = 0;
   // Tracks hero's most recent preflop decision and exactly how many raises
   // they were facing/making at that moment — used after the loop to classify
@@ -376,16 +393,19 @@ function analyzeHand(block, heroNameOverride) {
         street = 'FLOP';
         if (inHandThisFar) sawFlop = true;
         previousStreetAggressor = currentStreetAggressor; // the final preflop raiser, if any
+        streetDueBettor.FLOP = previousStreetAggressor;
         currentStreetAggressor = null;
         hasBetThisStreet = false;
       } else if (name === 'TURN') {
         street = 'TURN';
         previousStreetAggressor = currentStreetAggressor; // whoever bet/raised the flop, if anyone
+        streetDueBettor.TURN = previousStreetAggressor;
         currentStreetAggressor = null;
         hasBetThisStreet = false;
       } else if (name === 'RIVER') {
         street = 'RIVER';
         previousStreetAggressor = currentStreetAggressor; // whoever bet/raised the turn, if anyone
+        streetDueBettor.RIVER = previousStreetAggressor;
         currentStreetAggressor = null;
         hasBetThisStreet = false;
       } else if (name === 'SHOW DOWN') {
@@ -399,7 +419,6 @@ function analyzeHand(block, heroNameOverride) {
     if ((m = RE_ANTE.exec(l)) && m[1] === hero) { contributed += parseFloat(m[2]); continue; }
     if ((m = RE_SB.exec(l)) && m[1] === hero) { contributed += parseFloat(m[2]); continue; }
     if ((m = RE_BB.exec(l)) && m[1] === hero) { contributed += parseFloat(m[2]); continue; }
-    if ((m = RE_SHOWS.exec(l)) && m[1] === hero && hasValidCards(m[2])) { heroCardsShown = true; continue; }
 
     if ((m = RE_FOLD.exec(l))) {
       const who = m[1];
@@ -438,17 +457,58 @@ function analyzeHand(block, heroNameOverride) {
           facedCBetOpportunity[street] = true;
           foldedToCBet[street] = true;
         }
+        // Fold to Float: hero already missed their own c-bet chance this
+        // street (cbetOpportunity[street] was set true by hero's own
+        // earlier check on this same street, cbetMade[street] still false)
+        // and is now folding to a bet from someone else. Mutually exclusive
+        // with Fold to C-Bet above: that one requires the bettor to BE
+        // previousStreetAggressor; this one requires HERO to have been.
+        if (hasBetThisStreet && cbetOpportunity[street] && !cbetMade[street]) {
+          facedFloatOpportunity[street] = true;
+          foldedToFloat[street] = true;
+        }
+        // Fold to Probe: hero was already the due bettor on the PRIOR
+        // street (streetDueBettor[priorStreet] === hero), checked it, and
+        // that prior street had NO bet from anyone at all (a genuine
+        // check-through) — so THIS street's bet is a probe, not a
+        // continuation of anything. See the Float/Probe comment above.
+        {
+          const priorStreet = PRIOR_STREET[street];
+          if (hasBetThisStreet && priorStreet && streetDueBettor[priorStreet] === hero && missedCbetThisStreet[priorStreet] && !streetWasBet[priorStreet]) {
+            facedProbeOpportunity[street] = true;
+            foldedToProbe[street] = true;
+          }
+        }
       }
       activePlayers.delete(who);
       continue;
     }
     if ((m = RE_CHECK.exec(l))) {
-      if (m[1] === hero && streetAgg[street]) {
+      const who = m[1];
+      // Float/Probe setup: whoever was "due" to continuation-bet this
+      // street (the previous street's aggressor) checking instead —
+      // tracked for ANY player, not just hero, since a later player's
+      // float/probe opportunity depends on this regardless of who's being
+      // analyzed this call.
+      if (streetAgg[street] && who === previousStreetAggressor && !hasBetThisStreet) missedCbetThisStreet[street] = true;
+      if (who === hero && streetAgg[street]) {
         streetAgg[street].checks++;
         awaitingCheckRaise[street] = true;
         // Hero had the c-bet chance (was the previous street's aggressor,
         // no bet in front of them yet) and declined it by checking.
         if (previousStreetAggressor === hero && !hasBetThisStreet) cbetOpportunity[street] = true;
+        // Float: hero is reacting to someone else's already-recorded
+        // missed c-bet THIS street, and is themselves declining to float it
+        // (who !== previousStreetAggressor excludes hero's own check above
+        // from counting as a float opportunity against themselves).
+        if (missedCbetThisStreet[street] && who !== previousStreetAggressor && !hasBetThisStreet) floatOpportunity[street] = true;
+        // Probe: the PRIOR street was checked through entirely by its due
+        // bettor (not hero), and hero — first to act THIS street — is
+        // declining to probe it too.
+        const priorStreet = PRIOR_STREET[street];
+        if (priorStreet && streetDueBettor[priorStreet] != null && streetDueBettor[priorStreet] !== hero && missedCbetThisStreet[priorStreet] && !streetWasBet[priorStreet] && !hasBetThisStreet) {
+          probeOpportunity[street] = true;
+        }
       }
       continue;
     }
@@ -480,6 +540,19 @@ function analyzeHand(block, heroNameOverride) {
           if (hasBetThisStreet && previousStreetAggressor != null && currentStreetAggressor === previousStreetAggressor) {
             facedCBetOpportunity[street] = true;
           }
+          // Called a float: hero already missed their own c-bet chance
+          // this street and is calling someone else's bet into it.
+          if (hasBetThisStreet && cbetOpportunity[street] && !cbetMade[street]) {
+            facedFloatOpportunity[street] = true;
+          }
+          // Called a probe: see the Fold to Probe comment above for the
+          // condition — same, minus the fold.
+          {
+            const priorStreet = PRIOR_STREET[street];
+            if (hasBetThisStreet && priorStreet && streetDueBettor[priorStreet] === hero && missedCbetThisStreet[priorStreet] && !streetWasBet[priorStreet]) {
+              facedProbeOpportunity[street] = true;
+            }
+          }
         }
         if (street === 'PREFLOP' && facedThreeBetAfterOpening) facedThreeBetAfterOpening = false; // called it, didn't fold
         if (street === 'PREFLOP' && facedFourBetAfterThreeBetting) facedFourBetAfterThreeBetting = false; // called it, didn't fold
@@ -504,11 +577,21 @@ function analyzeHand(block, heroNameOverride) {
           // street (a second one would be logged as "raises"), so this is
           // exactly hero's cbet-or-not decision point.
           if (previousStreetAggressor === hero) { cbetOpportunity[street] = true; cbetMade[street] = true; }
+          // Float: hero bets after someone else already missed their own
+          // c-bet chance THIS street (checked back when they had it).
+          if (missedCbetThisStreet[street] && previousStreetAggressor !== hero) { floatOpportunity[street] = true; floatMade[street] = true; }
+          // Probe: the PRIOR street checked through entirely by its due
+          // bettor (not hero), and hero — first to act this street — bets.
+          const priorStreet = PRIOR_STREET[street];
+          if (priorStreet && streetDueBettor[priorStreet] != null && streetDueBettor[priorStreet] !== hero && missedCbetThisStreet[priorStreet] && !streetWasBet[priorStreet]) {
+            probeOpportunity[street] = true;
+            probeMade[street] = true;
+          }
         }
       }
       // Tracks who's aggressive on the CURRENT street, regardless of who —
       // feeds the c-bet/fold-to-c-bet detection above for every street.
-      if (street !== 'PREFLOP') { hasBetThisStreet = true; currentStreetAggressor = who; }
+      if (street !== 'PREFLOP') { hasBetThisStreet = true; currentStreetAggressor = who; streetWasBet[street] = true; }
       continue;
     }
     if ((m = RE_RAISE.exec(l))) {
@@ -554,6 +637,18 @@ function analyzeHand(block, heroNameOverride) {
           if (hasBetThisStreet && previousStreetAggressor != null && currentStreetAggressor === previousStreetAggressor) {
             facedCBetOpportunity[street] = true;
           }
+          // Raised a float: hero already missed their own c-bet chance
+          // this street and is raising someone else's bet into it.
+          if (hasBetThisStreet && cbetOpportunity[street] && !cbetMade[street]) {
+            facedFloatOpportunity[street] = true;
+          }
+          // Raised a probe: see the Fold to Probe comment above.
+          {
+            const priorStreet = PRIOR_STREET[street];
+            if (hasBetThisStreet && priorStreet && streetDueBettor[priorStreet] === hero && missedCbetThisStreet[priorStreet] && !streetWasBet[priorStreet]) {
+              facedProbeOpportunity[street] = true;
+            }
+          }
         }
       } else if (street === 'PREFLOP' && heroOpenedPreflop && preflopRaiseCount === 1) {
         // someone re-raised Hero's own open — a genuine 3-bet against Hero
@@ -565,7 +660,7 @@ function analyzeHand(block, heroNameOverride) {
         hadFourBetOpportunityAfterThreeBetting = true;
       }
       if (street === 'PREFLOP') { anyVoluntaryPreflopAction = true; preflopRaiseCount++; callersSinceLastRaise = 0; }
-      else hasBetThisStreet = true;
+      else { hasBetThisStreet = true; if (streetWasBet[street] !== undefined) streetWasBet[street] = true; }
       currentStreetAggressor = who; // this raise is now the (possibly new) aggressor of the current street
       continue;
     }
@@ -617,6 +712,17 @@ function analyzeHand(block, heroNameOverride) {
   const stealOpportunity = rfiOpportunity && isLatePosition;
   const attemptSteal = rfi && isLatePosition;
 
+  // Double/Triple Barrel: pure post-hoc derivations from the c-bet fields
+  // above, needing no extra loop-time state. Double Barrel opportunity is
+  // "hero c-bet the flop AND is still the designated bettor going into
+  // turn" (their flop bet got called/raised rather than folded to, so they
+  // get to act again as the aggressor) — cbetOpportunity.TURN already means
+  // exactly that. Triple Barrel is the same one street deeper.
+  const doubleBarrelOpportunity = cbetMade.FLOP && cbetOpportunity.TURN;
+  const doubleBarrel = doubleBarrelOpportunity && cbetMade.TURN;
+  const tripleBarrelOpportunity = cbetMade.FLOP && cbetMade.TURN && cbetOpportunity.RIVER;
+  const tripleBarrel = tripleBarrelOpportunity && cbetMade.RIVER;
+
   return {
     handId, bb, stakesLabel: `$${sbStake}/$${bbStake}`, date: `${y}-${mo}-${d}`, time: `${hh.padStart(2, '0')}:${mm}:${ss}`, maxSeats,
     position, isBombPot,
@@ -647,10 +753,21 @@ function analyzeHand(block, heroNameOverride) {
     cbetMade,
     facedCBetOpportunity,
     foldedToCBet,
+    floatOpportunity,
+    floatMade,
+    facedFloatOpportunity,
+    foldedToFloat,
+    probeOpportunity,
+    probeMade,
+    facedProbeOpportunity,
+    foldedToProbe,
+    doubleBarrelOpportunity,
+    doubleBarrel,
+    tripleBarrelOpportunity,
+    tripleBarrel,
     handCategory: handCategoryFor(preflopRaiseCount, heroLastPreflopAction),
     sawFlop,
     reachedShowdown,
-    heroCardsShown,
     wonAtShowdown: reachedShowdown && anyCollected,
     wonWhenSawFlop: sawFlop && collected - contributed > 0,
     postflopAggressive,
@@ -897,6 +1014,55 @@ function aggregateStats(allHands) {
   const turnFoldToCbet = foldToCbetPct('TURN');
   const riverFoldToCbet = foldToCbetPct('RIVER');
 
+  // Float% and Fold to Float%: same shape as c-bet above, see analyzeHand's
+  // floatOpportunity/floatMade/facedFloatOpportunity/foldedToFloat comment
+  // for the underlying definition (in-position, same-street reaction to a
+  // missed continuation bet — applies to all 3 streets).
+  function floatPct(streetKey) {
+    const madeCount = allHands.filter((h) => h.floatMade && h.floatMade[streetKey]).length;
+    const oppCount = allHands.filter((h) => h.floatOpportunity && h.floatOpportunity[streetKey]).length;
+    return { pct: pct(madeCount, oppCount), opportunities: oppCount };
+  }
+  const flopFloat = floatPct('FLOP');
+  const turnFloat = floatPct('TURN');
+  const riverFloat = floatPct('RIVER');
+
+  function foldToFloatPct(streetKey) {
+    const foldCount = allHands.filter((h) => h.foldedToFloat && h.foldedToFloat[streetKey]).length;
+    const oppCount = allHands.filter((h) => h.facedFloatOpportunity && h.facedFloatOpportunity[streetKey]).length;
+    return { pct: pct(foldCount, oppCount), opportunities: oppCount };
+  }
+  const flopFoldToFloat = foldToFloatPct('FLOP');
+  const turnFoldToFloat = foldToFloatPct('TURN');
+  const riverFoldToFloat = foldToFloatPct('RIVER');
+
+  // Probe% and Fold to Probe%: out-of-position, NEXT-street reaction to a
+  // missed continuation bet — turn/river only, see analyzeHand's
+  // probeOpportunity/probeMade/facedProbeOpportunity/foldedToProbe comment.
+  function probePct(streetKey) {
+    const madeCount = allHands.filter((h) => h.probeMade && h.probeMade[streetKey]).length;
+    const oppCount = allHands.filter((h) => h.probeOpportunity && h.probeOpportunity[streetKey]).length;
+    return { pct: pct(madeCount, oppCount), opportunities: oppCount };
+  }
+  const turnProbe = probePct('TURN');
+  const riverProbe = probePct('RIVER');
+
+  function foldToProbePct(streetKey) {
+    const foldCount = allHands.filter((h) => h.foldedToProbe && h.foldedToProbe[streetKey]).length;
+    const oppCount = allHands.filter((h) => h.facedProbeOpportunity && h.facedProbeOpportunity[streetKey]).length;
+    return { pct: pct(foldCount, oppCount), opportunities: oppCount };
+  }
+  const turnFoldToProbe = foldToProbePct('TURN');
+  const riverFoldToProbe = foldToProbePct('RIVER');
+
+  // Double/Triple Barrel%: (times hero followed through) / (times hero was
+  // still the designated bettor with a live chance to). See analyzeHand's
+  // doubleBarrelOpportunity/tripleBarrelOpportunity comment.
+  const doubleBarrelCount = allHands.filter((h) => h.doubleBarrel).length;
+  const doubleBarrelOppCount = allHands.filter((h) => h.doubleBarrelOpportunity).length;
+  const tripleBarrelCount = allHands.filter((h) => h.tripleBarrel).length;
+  const tripleBarrelOppCount = allHands.filter((h) => h.tripleBarrelOpportunity).length;
+
   // By position (non-bomb-pot only — position has no meaning without a
   // preflop betting round to act in).
   const byPosition = {};
@@ -922,28 +1088,28 @@ function aggregateStats(allHands) {
   }
 
   // Results over time (by date) — tracked as three parallel cumulative
-  // series: the total (unchanged from before), and a split by whether
-  // hero's cards were literally shown at showdown. Deliberately uses
-  // heroCardsShown here, NOT reachedShowdown — those are genuinely
-  // different things (reachedShowdown, used for WTSD% above, is the
-  // standard poker-tracking definition: did the hand structurally reach a
-  // real 2+-way contest, regardless of whether hero's own cards ended up
-  // revealed; a hand can reach a real showdown and still have hero muck a
-  // loser without showing it, which is common and not a bug — confirmed
-  // against real data: 1512 hands reach a genuine showdown, but only 1232
-  // of them have hero's cards actually shown). For this specific split —
-  // "does hero's result come from hands where their cards were shown, or
-  // not" — the literal signal is the one that actually answers that
-  // question. showdownNet + nonShowdownNet always equals net for every
-  // date, by construction (every hand falls into exactly one bucket) —
-  // verified as an explicit invariant in test/stats.test.js, not just
-  // assumed to hold.
+  // series: the total (unchanged from before), and a showdown/non-showdown
+  // split matching the standard "redline" definition PokerTracker/Hold'em
+  // Manager/Hand2Note all use: Non-Showdown Winnings = Total Winnings -
+  // Showdown Winnings, where "showdown" means the HAND structurally reached
+  // a real 2+-way contest (reachedShowdown — the same flag WTSD% above
+  // already uses), not whether hero's own cards happened to be revealed.
+  // This used to key off heroCardsShown instead (a hand can reach a real
+  // showdown and still have hero muck a loser, or win after the opponent
+  // already showed and lost, without hero ever revealing their own cards —
+  // confirmed against real data: 1512 hands reach a genuine showdown, but
+  // only 1232 of them have hero's cards actually shown) — every major
+  // tracker counts those ~280 hands as showdown results regardless, so this
+  // now matches that rather than a narrower, non-standard definition.
+  // showdownNet + nonShowdownNet always equals net for every date, by
+  // construction (every hand falls into exactly one bucket) — verified as
+  // an explicit invariant in test/stats.test.js, not just assumed to hold.
   const byDate = {};
   for (const h of allHands) {
     byDate[h.date] = byDate[h.date] || { hands: 0, net: 0, showdownNet: 0, nonShowdownNet: 0 };
     byDate[h.date].hands++;
     byDate[h.date].net += h.net;
-    if (h.heroCardsShown) byDate[h.date].showdownNet += h.net;
+    if (h.reachedShowdown) byDate[h.date].showdownNet += h.net;
     else byDate[h.date].nonShowdownNet += h.net;
   }
   const dates = Object.keys(byDate).sort();
@@ -984,7 +1150,7 @@ function aggregateStats(allHands) {
   let handCumulative = 0, handCumulativeShowdown = 0, handCumulativeNonShowdown = 0, handCumulativeEV = 0;
   const handTimeline = chronological.map((h, i) => {
     handCumulative += h.net;
-    if (h.heroCardsShown) handCumulativeShowdown += h.net;
+    if (h.reachedShowdown) handCumulativeShowdown += h.net;
     else handCumulativeNonShowdown += h.net;
     const evNet = (h.net / h.bb + (h.evAdjustmentBB || 0)) * h.bb;
     handCumulativeEV += evNet;
@@ -1060,6 +1226,30 @@ function aggregateStats(allHands) {
     turnFoldToCbetOpportunities: turnFoldToCbet.opportunities,
     riverFoldToCbet: riverFoldToCbet.pct,
     riverFoldToCbetOpportunities: riverFoldToCbet.opportunities,
+    flopFloat: flopFloat.pct,
+    flopFloatOpportunities: flopFloat.opportunities,
+    turnFloat: turnFloat.pct,
+    turnFloatOpportunities: turnFloat.opportunities,
+    riverFloat: riverFloat.pct,
+    riverFloatOpportunities: riverFloat.opportunities,
+    flopFoldToFloat: flopFoldToFloat.pct,
+    flopFoldToFloatOpportunities: flopFoldToFloat.opportunities,
+    turnFoldToFloat: turnFoldToFloat.pct,
+    turnFoldToFloatOpportunities: turnFoldToFloat.opportunities,
+    riverFoldToFloat: riverFoldToFloat.pct,
+    riverFoldToFloatOpportunities: riverFoldToFloat.opportunities,
+    turnProbe: turnProbe.pct,
+    turnProbeOpportunities: turnProbe.opportunities,
+    riverProbe: riverProbe.pct,
+    riverProbeOpportunities: riverProbe.opportunities,
+    turnFoldToProbe: turnFoldToProbe.pct,
+    turnFoldToProbeOpportunities: turnFoldToProbe.opportunities,
+    riverFoldToProbe: riverFoldToProbe.pct,
+    riverFoldToProbeOpportunities: riverFoldToProbe.opportunities,
+    doubleBarrel: pct(doubleBarrelCount, doubleBarrelOppCount),
+    doubleBarrelOppCount,
+    tripleBarrel: pct(tripleBarrelCount, tripleBarrelOppCount),
+    tripleBarrelOppCount,
     byPosition,
     byStake,
     timeline,
