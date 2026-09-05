@@ -1072,6 +1072,21 @@ test('aggregateStats excludes bomb pot hands from VPIP/PFR/position denominators
   assert.strictEqual(stats.vpip, 0, 'VPIP% denominator should be the 1 non-bomb hand only, not 2');
 });
 
+test('aggregateStats excludes bomb pot hands from WTSD/W$SD/WWSF denominators too', () => {
+  const hands = [
+    // Non-bomb: saw flop, reached a real showdown, won it.
+    { bb: 0.5, net: 5, vpip: true, pfr: true, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, reachedShowdown: true, wonAtShowdown: true, wonWhenSawFlop: true, postflopAggressive: 1, postflopCalls: 0, isBombPot: false, position: 'BTN' },
+    // Bomb pot: also saw flop, reached showdown, and won — but a forced
+    // multiway pot everyone antes into isn't a fair comparison for a
+    // postflop-skill rate, so none of this should count toward WTSD/WWSF.
+    { bb: 0.5, net: 8, vpip: false, pfr: false, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, reachedShowdown: true, wonAtShowdown: true, wonWhenSawFlop: true, postflopAggressive: 1, postflopCalls: 0, isBombPot: true, position: null },
+  ];
+  const stats = aggregateStats(hands);
+  assert.strictEqual(stats.wtsd, 100, 'WTSD should be 1/1 non-bomb hands, not 2/2 with the bomb pot mixed in');
+  assert.strictEqual(stats.wonAtShowdown, 100, 'W$SD denominator should also exclude the bomb pot');
+  assert.strictEqual(stats.wonWhenSawFlop, 100, 'WWSF denominator should also exclude the bomb pot');
+});
+
 test('a hand with no resolution anywhere is excluded (returns null), matching the converter\'s own skip condition', () => {
   const r = analyzeHand(HAND_NO_RESOLUTION, 'Hero');
   assert.strictEqual(r, null, 'a hand with no collected-from-pot line anywhere cannot be attributed a result');
@@ -1084,6 +1099,17 @@ test('position labeling: 6-max full table, heads-up, and an unusual size fall ba
   assert.strictEqual(nine.length, 9);
   assert.strictEqual(nine[0], 'SB');
   assert.strictEqual(nine[nine.length - 1], 'BTN');
+});
+
+test('analyzeHand carries a stakesLabel, and aggregateStats\' byStake buckets carry it too — needed for the "Home" (most-played stake) stat', () => {
+  const r = analyzeHand(HAND_VPIP_CALL, 'Hero');
+  assert.strictEqual(r.stakesLabel, '$0.25/$0.50');
+
+  const other = analyzeHand(HAND_VPIP_FOLD, 'Hero'); // same $0.25/$0.50 stake
+  const stats = aggregateStats([r, other]);
+  assert.strictEqual(Object.keys(stats.byStake).length, 1, 'both hands are the same bb — one bucket');
+  assert.strictEqual(stats.byStake[r.bb].stakesLabel, '$0.25/$0.50');
+  assert.strictEqual(stats.byStake[r.bb].hands, 2);
 });
 
 test('aggregateStats basic math: net, BB/100, and win-at-showdown check out by hand', () => {
@@ -1104,6 +1130,25 @@ test('aggregateStats basic math: net, BB/100, and win-at-showdown check out by h
   assert.strictEqual(stats.wtsd, 50, 'WTSD should divide by hands that saw a flop, not all hands');
   assert.strictEqual(stats.wonAtShowdown, 100);
   assert.strictEqual(stats.aggressionFactor, 1 / 1);
+});
+
+test('aggregateStats EV Winrate (evBb100): shares the bb100 denominator, and folds in evAdjustmentBB only where it\'s actually set', () => {
+  const hands = [
+    // No all-in EV moment (evAdjustmentBB left unset) — contributes its
+    // actual result unchanged, exactly like bb100 does.
+    { bb: 0.5, net: 5 },
+    // Lost the actual hand (-5bb) but ran a genuine all-in adjustment of
+    // +3bb (i.e. was "supposed to" only be down 2bb at the equity the
+    // money went in with).
+    { bb: 0.5, net: -2.5, evAdjustmentBB: 3 },
+    { bb: 0.5, net: -0.5 },
+  ];
+  const stats = aggregateStats(hands);
+  // bb: 10 + (-5+3) + (-1) = 7 over 3 hands -> 233.33 bb/100.
+  assert.ok(Math.abs(stats.evBb100 - (700 / 3)) < 0.001);
+  assert.strictEqual(stats.evAdjustedHandCount, 1, 'only the hand with a non-null evAdjustmentBB counts');
+  // bb100 itself must be unaffected by evAdjustmentBB being present.
+  assert.ok(Math.abs(stats.bb100 - (400 / 3)) < 0.001);
 });
 
 test('4-bet as raiser: hero opens, gets 3-bet, hero 4-bets — the same shape as the 3-bet stats, one level deeper', () => {
@@ -1218,9 +1263,19 @@ test('c-bet made: hero was the preflop aggressor and bets the flop, then double-
   const r = analyzeHand(HAND_CBET_FLOP_MADE, 'Hero');
   assert.deepStrictEqual(r.cbetOpportunity, { FLOP: true, TURN: true, RIVER: false });
   assert.deepStrictEqual(r.cbetMade, { FLOP: true, TURN: true, RIVER: false });
+  // Hero was continuously the aggressor here (bet flop, bet turn) — never
+  // missed a c-bet chance, so no float/probe opportunity exists for anyone.
+  assert.deepStrictEqual(r.floatOpportunity, { FLOP: false, TURN: false, RIVER: false });
+  assert.deepStrictEqual(r.facedFloatOpportunity, { FLOP: false, TURN: false, RIVER: false });
+  assert.deepStrictEqual(r.probeOpportunity, { TURN: false, RIVER: false });
+  assert.deepStrictEqual(r.facedProbeOpportunity, { TURN: false, RIVER: false });
+  assert.strictEqual(r.doubleBarrelOpportunity, true, 'hero c-bet the flop and got called, so was still the designated bettor going into turn');
+  assert.strictEqual(r.doubleBarrel, true, 'and bet the turn too');
+  assert.strictEqual(r.tripleBarrelOpportunity, false, 'the hand never reached a river — PlayerA folded to the turn barrel');
+  assert.strictEqual(r.tripleBarrel, false);
 });
 
-test('c-bet declined via check, and a non-aggressor\'s later bet is never mistaken for a c-bet', () => {
+test('c-bet declined via check, flop checks through entirely, and PlayerA\'s turn bet is a genuine turn PROBE (not a c-bet, not a float)', () => {
   const r = analyzeHand(HAND_CBET_DECLINED, 'Hero');
   assert.deepStrictEqual(r.cbetOpportunity, { FLOP: true, TURN: false, RIVER: false }, 'hero was the preflop aggressor and had the flop c-bet chance, but not the turn one — nobody bet the flop, so nobody carried aggression into the turn');
   assert.deepStrictEqual(r.cbetMade, { FLOP: false, TURN: false, RIVER: false });
@@ -1228,6 +1283,255 @@ test('c-bet declined via check, and a non-aggressor\'s later bet is never mistak
   // of anyone's prior aggression — must not register as a c-bet hero faced.
   assert.deepStrictEqual(r.facedCBetOpportunity, { FLOP: false, TURN: false, RIVER: false });
   assert.deepStrictEqual(r.foldedToCBet, { FLOP: false, TURN: false, RIVER: false });
+  // Nor a Float: Float is a SAME-street reaction (the reactor acting later
+  // than the checker within one betting round) — hero's own turn check
+  // isn't "hero reacting to someone else's check this street", it's hero's
+  // own normal action, so facedFloatOpportunity never fires here.
+  assert.deepStrictEqual(r.facedFloatOpportunity, { FLOP: false, TURN: false, RIVER: false });
+  assert.deepStrictEqual(r.foldedToFloat, { FLOP: false, TURN: false, RIVER: false });
+  // It IS exactly a Probe: hero (the preflop raiser, OOP postflop) checked
+  // the flop back, the flop went check-check with no bet from anyone at
+  // all, and PlayerA — out of position, first to act on the turn — bet
+  // right into hero's missed flop c-bet on the very next street.
+  assert.deepStrictEqual(r.facedProbeOpportunity, { TURN: true, RIVER: false });
+  assert.deepStrictEqual(r.foldedToProbe, { TURN: true, RIVER: false });
+  // Hero is the one who got probed here, not the prober.
+  assert.deepStrictEqual(r.probeOpportunity, { TURN: false, RIVER: false });
+  assert.deepStrictEqual(r.probeMade, { TURN: false, RIVER: false });
+
+  const fromPlayerA = analyzeHand(HAND_CBET_DECLINED, 'PlayerA');
+  assert.deepStrictEqual(fromPlayerA.probeOpportunity, { TURN: true, RIVER: false }, 'from PlayerA\'s own perspective, this is their turn probe opportunity');
+  assert.deepStrictEqual(fromPlayerA.probeMade, { TURN: true, RIVER: false });
+});
+
+test('float opportunity declined via check: hero was NOT the previous street\'s aggressor, faced a checked-back street, and also checked instead of floating', () => {
+  // HAND_CALLED_CBET_FLOP: PlayerA c-bets flop (hero calls), then PlayerA
+  // checks the turn back — a genuine float opportunity for hero (hero acts
+  // AFTER PlayerA within the same turn) — but hero checks too instead of
+  // betting into it.
+  const r = analyzeHand(HAND_CALLED_CBET_FLOP, 'Hero');
+  assert.deepStrictEqual(r.floatOpportunity, { FLOP: false, TURN: true, RIVER: false });
+  assert.deepStrictEqual(r.floatMade, { FLOP: false, TURN: false, RIVER: false }, 'hero checked back instead of floating');
+});
+
+// Hero is the preflop raiser but is OUT of position postflop (raised from
+// the BB over a limp) — checks the flop back, and PlayerA (in position)
+// bets right into it on the SAME street: a genuine Float. Only possible
+// because the raiser is OOP: an in-position raiser would act last on the
+// flop, so by the time they checked, the street would already be over.
+const HAND_FLOP_FLOAT = `Weplay Hand #922:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:22:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: calls $0.25
+Hero: raises $1.5 to $2
+PlayerA: calls $1.5
+*** FLOP *** [Ah Kd 9s]
+Hero: checks
+PlayerA: bets $2
+Hero: folds
+Uncalled bet ($2) returned to PlayerA
+*** SHOW DOWN ***
+PlayerA collected $3 from pot
+*** SUMMARY ***
+Total pot $3 | Rake $0
+Seat 1: PlayerA (small blind) collected ($3)
+Seat 2: Hero (big blind) folded on the Flop`;
+
+test('flop float: the (OOP) preflop raiser checks the flop back, and the in-position player bets right into it, same street', () => {
+  const floater = analyzeHand(HAND_FLOP_FLOAT, 'PlayerA');
+  assert.deepStrictEqual(floater.floatOpportunity, { FLOP: true, TURN: false, RIVER: false });
+  assert.deepStrictEqual(floater.floatMade, { FLOP: true, TURN: false, RIVER: false });
+
+  const checker = analyzeHand(HAND_FLOP_FLOAT, 'Hero');
+  assert.deepStrictEqual(checker.cbetOpportunity, { FLOP: true, TURN: false, RIVER: false }, 'hero was the preflop raiser and had the flop c-bet chance');
+  assert.deepStrictEqual(checker.cbetMade, { FLOP: false, TURN: false, RIVER: false }, 'and declined it');
+  assert.deepStrictEqual(checker.facedFloatOpportunity, { FLOP: true, TURN: false, RIVER: false });
+  assert.deepStrictEqual(checker.foldedToFloat, { FLOP: true, TURN: false, RIVER: false });
+});
+
+// Hero c-bets the flop (a genuine continuation bet, called — establishing
+// hero as the designated bettor going into turn), then checks the turn
+// back — declining to barrel — and PlayerA bets right into it, same
+// street: a genuine turn Float (NOT a probe — the flop was actually bet,
+// not checked through, so there's no "prior street checked through" for a
+// probe to react to).
+const HAND_TURN_FLOAT = `Weplay Hand #924:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:24:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: calls $0.25
+Hero: raises $1.5 to $2
+PlayerA: calls $1.5
+*** FLOP *** [Ah Kd 9s]
+Hero: bets $2
+PlayerA: calls $2
+*** TURN *** [Ah Kd 9s] [3h]
+Hero: checks
+PlayerA: bets $4
+Hero: folds
+Uncalled bet ($4) returned to PlayerA
+*** SHOW DOWN ***
+PlayerA collected $6 from pot
+*** SUMMARY ***
+Total pot $6 | Rake $0
+Seat 1: PlayerA (small blind) collected ($6)
+Seat 2: Hero (big blind) folded on the Turn`;
+
+test('turn float: hero c-bets flop (called), checks the turn back (declining to barrel), and PlayerA bets right into it, same street', () => {
+  const checker = analyzeHand(HAND_TURN_FLOAT, 'Hero');
+  assert.strictEqual(checker.doubleBarrelOpportunity, true, 'hero c-bet flop and got called — still the designated bettor going into turn');
+  assert.strictEqual(checker.doubleBarrel, false, 'but hero checked the turn instead of barreling');
+  assert.deepStrictEqual(checker.facedFloatOpportunity, { FLOP: false, TURN: true, RIVER: false });
+  assert.deepStrictEqual(checker.foldedToFloat, { FLOP: false, TURN: true, RIVER: false });
+  assert.deepStrictEqual(checker.facedProbeOpportunity, { TURN: false, RIVER: false }, 'the flop was actually bet, not checked through — this is a float, not a probe');
+  assert.deepStrictEqual(checker.floatOpportunity, { FLOP: false, TURN: false, RIVER: false }, 'hero is the one who got floated, not the floater');
+
+  const floater = analyzeHand(HAND_TURN_FLOAT, 'PlayerA');
+  assert.deepStrictEqual(floater.floatOpportunity, { FLOP: false, TURN: true, RIVER: false });
+  assert.deepStrictEqual(floater.floatMade, { FLOP: false, TURN: true, RIVER: false });
+  assert.deepStrictEqual(floater.probeOpportunity, { TURN: false, RIVER: false });
+});
+
+// Hero c-bets the flop (called) and bets the turn too (called — a real
+// double barrel), then checks the river back — declining to triple-barrel
+// — and PlayerA bets right into it, same street: a genuine river Float.
+const HAND_RIVER_FLOAT = `Weplay Hand #923:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:23:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: calls $0.25
+Hero: raises $1.5 to $2
+PlayerA: calls $1.5
+*** FLOP *** [Ah Kd 9s]
+Hero: bets $2
+PlayerA: calls $2
+*** TURN *** [Ah Kd 9s] [3h]
+Hero: bets $4
+PlayerA: calls $4
+*** RIVER *** [Ah Kd 9s 3h] [4h]
+Hero: checks
+PlayerA: bets $8
+Hero: folds
+Uncalled bet ($8) returned to PlayerA
+*** SHOW DOWN ***
+PlayerA collected $16 from pot
+*** SUMMARY ***
+Total pot $16 | Rake $0
+Seat 1: PlayerA (small blind) collected ($16)
+Seat 2: Hero (big blind) folded on the River`;
+
+test('river float: hero double-barrels flop+turn (called both), checks the river back (declining to triple-barrel), and PlayerA bets right into it, same street', () => {
+  const checker = analyzeHand(HAND_RIVER_FLOAT, 'Hero');
+  assert.strictEqual(checker.doubleBarrelOpportunity, true);
+  assert.strictEqual(checker.doubleBarrel, true, 'hero bet flop and turn, both called');
+  assert.strictEqual(checker.tripleBarrelOpportunity, true, 'still the designated bettor going into river after the turn barrel got called');
+  assert.strictEqual(checker.tripleBarrel, false, 'but hero checked the river instead');
+  assert.deepStrictEqual(checker.facedFloatOpportunity, { FLOP: false, TURN: false, RIVER: true });
+  assert.deepStrictEqual(checker.foldedToFloat, { FLOP: false, TURN: false, RIVER: true });
+  assert.deepStrictEqual(checker.facedProbeOpportunity, { TURN: false, RIVER: false }, 'the turn was actually bet, not checked through — this is a float, not a probe');
+  assert.deepStrictEqual(checker.floatOpportunity, { FLOP: false, TURN: false, RIVER: false }, 'hero is the one who got floated, not the floater, on every street');
+
+  const floater = analyzeHand(HAND_RIVER_FLOAT, 'PlayerA');
+  assert.deepStrictEqual(floater.floatOpportunity, { FLOP: false, TURN: false, RIVER: true });
+  assert.deepStrictEqual(floater.floatMade, { FLOP: false, TURN: false, RIVER: true });
+});
+
+// Hero checks preflop (no raise from anyone), PlayerA leads the flop and
+// gets called (establishing PlayerA as the designated bettor going into
+// turn), then PlayerA checks the turn back — and it goes check-check (NO
+// one bets turn at all) — and hero (OOP, first to act) bets the river
+// right into PlayerA's missed turn continuation: a genuine river PROBE.
+const HAND_RIVER_PROBE = `Weplay Hand #925:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 19:25:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+PlayerA: calls $0.25
+Hero: checks
+*** FLOP *** [Ah Kd 9s]
+Hero: checks
+PlayerA: bets $1
+Hero: calls $1
+*** TURN *** [Ah Kd 9s] [3h]
+Hero: checks
+PlayerA: checks
+*** RIVER *** [Ah Kd 9s 3h] [4h]
+Hero: bets $2
+PlayerA: folds
+Uncalled bet ($2) returned to Hero
+*** SHOW DOWN ***
+Hero collected $3 from pot
+*** SUMMARY ***
+Total pot $3 | Rake $0
+Seat 1: PlayerA (small blind) folded on the River
+Seat 2: Hero (big blind) collected ($3)`;
+
+test('river probe: PlayerA leads flop (called), checks the turn back and it goes check-check, and hero (OOP) bets the river right into it', () => {
+  const prober = analyzeHand(HAND_RIVER_PROBE, 'Hero');
+  assert.deepStrictEqual(prober.probeOpportunity, { TURN: false, RIVER: true });
+  assert.deepStrictEqual(prober.probeMade, { TURN: false, RIVER: true });
+  assert.deepStrictEqual(prober.floatOpportunity, { FLOP: false, TURN: false, RIVER: false }, 'hero never reacted same-street to anyone missing a c-bet');
+
+  const checker = analyzeHand(HAND_RIVER_PROBE, 'PlayerA');
+  assert.deepStrictEqual(checker.cbetOpportunity, { FLOP: false, TURN: true, RIVER: false }, 'PlayerA led the flop and got called, so was due on turn (flop itself was not a c-bet — nobody raised preflop)');
+  assert.deepStrictEqual(checker.cbetMade, { FLOP: false, TURN: false, RIVER: false }, 'PlayerA checked the turn back');
+  assert.deepStrictEqual(checker.facedProbeOpportunity, { TURN: false, RIVER: true });
+  assert.deepStrictEqual(checker.foldedToProbe, { TURN: false, RIVER: true });
+});
+
+test('aggregateStats: Float%/Probe% and their Fold-to variants per street, and Double/Triple Barrel%, divide by the real opportunity counts', () => {
+  const flopFloatMade = analyzeHand(HAND_FLOP_FLOAT, 'PlayerA'); // flop float opportunity + made
+  const turnFloatMade = analyzeHand(HAND_TURN_FLOAT, 'PlayerA'); // turn float opportunity + made
+  const turnFloatDeclined = analyzeHand(HAND_CALLED_CBET_FLOP, 'Hero'); // turn float opportunity, declined
+  const riverFloatMade = analyzeHand(HAND_RIVER_FLOAT, 'PlayerA'); // river float opportunity + made
+  const turnProbeMade = analyzeHand(HAND_CBET_DECLINED, 'PlayerA'); // turn probe opportunity + made
+  const riverProbeMade = analyzeHand(HAND_RIVER_PROBE, 'Hero'); // river probe opportunity + made
+  const doubleBarrelMade = analyzeHand(HAND_CBET_FLOP_MADE, 'Hero'); // double barrel opportunity + made
+  const doubleBarrelDeclined = analyzeHand(HAND_TURN_FLOAT, 'Hero'); // double barrel opportunity, declined
+  const stats = aggregateStats([
+    flopFloatMade, turnFloatMade, turnFloatDeclined, riverFloatMade,
+    turnProbeMade, riverProbeMade, doubleBarrelMade, doubleBarrelDeclined,
+  ]);
+  // flopFloatOpportunities is 2, not just flopFloatMade's 1: turnProbeMade
+  // (HAND_CBET_DECLINED analyzed as PlayerA) ALSO checked the flop back
+  // right after hero's own flop check — a genuine flop float opportunity
+  // PlayerA declined, on the way to their real turn probe. Real, correct
+  // cross-hand behavior, not a bug — every fixture is being read from its
+  // own honest full action sequence, not hand-picked to only ever produce
+  // exactly the one stat its name suggests.
+  assert.strictEqual(stats.flopFloatOpportunities, 2);
+  assert.strictEqual(stats.flopFloat, 50, '1 of 2 real opportunities taken');
+  assert.strictEqual(stats.turnFloatOpportunities, 2, 'the made one and the declined one');
+  assert.strictEqual(stats.turnFloat, 50, '1 of 2 real opportunities taken');
+  assert.strictEqual(stats.riverFloatOpportunities, 1);
+  assert.strictEqual(stats.riverFloat, 100);
+  assert.strictEqual(stats.turnProbeOpportunities, 1);
+  assert.strictEqual(stats.turnProbe, 100);
+  // Likewise riverProbeOpportunities is 2, not just riverProbeMade's 1:
+  // turnFloatDeclined (HAND_CALLED_CBET_FLOP analyzed as Hero) has the
+  // turn check through entirely (hero declined the float too), which
+  // hands hero a genuine river probe opportunity right after — also
+  // declined (both players check the river down to showdown).
+  assert.strictEqual(stats.riverProbeOpportunities, 2);
+  assert.strictEqual(stats.riverProbe, 50, '1 of 2 real opportunities taken');
+  assert.strictEqual(stats.doubleBarrelOppCount, 2);
+  assert.strictEqual(stats.doubleBarrel, 50, '1 of 2 real opportunities taken');
 });
 
 test('fold to c-bet: hero was NOT the preflop aggressor, faces a genuine c-bet from the real aggressor, and folds', () => {
@@ -1393,10 +1697,10 @@ test('handCategoryFor is a pure function of (final raise count, hero\'s last act
 test('timeline: showdown + non-showdown cumulative always sums to the total cumulative, for every date', () => {
   const base = { bb: 1, vpip: true, pfr: true, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 0, isBombPot: false, position: 'BTN' };
   const hands = [
-    { ...base, date: '2026-01-01', net: 10, heroCardsShown: true },
-    { ...base, date: '2026-01-01', net: -3, heroCardsShown: false },
-    { ...base, date: '2026-01-02', net: -2, heroCardsShown: true },
-    { ...base, date: '2026-01-02', net: 5, heroCardsShown: false },
+    { ...base, date: '2026-01-01', net: 10, reachedShowdown: true },
+    { ...base, date: '2026-01-01', net: -3, reachedShowdown: false },
+    { ...base, date: '2026-01-02', net: -2, reachedShowdown: true },
+    { ...base, date: '2026-01-02', net: 5, reachedShowdown: false },
   ];
   const stats = aggregateStats(hands);
   assert.strictEqual(stats.timeline.length, 2);
@@ -1418,12 +1722,12 @@ test('timeline: showdown + non-showdown cumulative always sums to the total cumu
 test('timeline: the exact scenario asked about — showdown line profitable while non-showdown line goes negative, even though the total tells a different story on each day', () => {
   const base = { bb: 1, vpip: true, pfr: true, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 0, isBombPot: false, position: 'BTN' };
   const hands = [
-    // Day 1: won big with cards shown (+20), but lost a lot with cards not shown (-25) — net down on the day.
-    { ...base, date: '2026-01-01', net: 20, heroCardsShown: true },
-    { ...base, date: '2026-01-01', net: -25, heroCardsShown: false },
-    // Day 2: won more with cards shown (+10) and a little without showing too (+2) — net up.
-    { ...base, date: '2026-01-02', net: 10, heroCardsShown: true },
-    { ...base, date: '2026-01-02', net: 2, heroCardsShown: false },
+    // Day 1: won big at showdown (+20), but lost a lot without one (-25) — net down on the day.
+    { ...base, date: '2026-01-01', net: 20, reachedShowdown: true },
+    { ...base, date: '2026-01-01', net: -25, reachedShowdown: false },
+    // Day 2: won more at showdown (+10) and a little without one too (+2) — net up.
+    { ...base, date: '2026-01-02', net: 10, reachedShowdown: true },
+    { ...base, date: '2026-01-02', net: 2, reachedShowdown: false },
   ];
   const stats = aggregateStats(hands);
   const last = stats.timeline[stats.timeline.length - 1];
@@ -1434,29 +1738,32 @@ test('timeline: the exact scenario asked about — showdown line profitable whil
   assert.strictEqual(last.cumulativeShowdown + last.cumulativeNonShowdown, last.cumulative);
 });
 
-test('timeline: heroCardsShown (literal reveal), not reachedShowdown (structural WTSD-style definition), is what drives the showdown/non-showdown split — these are genuinely different signals', () => {
+test('timeline: reachedShowdown (structural, matches PokerTracker/HM/Hand2Note\'s standard redline definition) drives the showdown/non-showdown split, not whether hero\'s cards were literally shown', () => {
   const base = { bb: 1, vpip: true, pfr: true, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 0, isBombPot: false, position: 'BTN' };
-  // A hand that reached a genuine 2+-way showdown (reachedShowdown=true) but
-  // where hero lost and mucked without revealing (heroCardsShown=false) —
-  // exactly the real, common case found in this project's own data (312
-  // such hands out of 1512 genuine showdowns). This must land in the
-  // non-showdown (red) bucket, not the showdown (blue) one.
+  // A hand that reached a genuine 2+-way showdown (reachedShowdown=true) —
+  // the real, common case found in this project's own data (280 such hands
+  // out of 1512 genuine showdowns, mostly losses where hero mucked rather
+  // than reveal a loser). Every major tracker counts this as a showdown
+  // result regardless of whether hero's own cards were ever revealed, so it
+  // must land in the showdown (blue) bucket, not the non-showdown (red) one.
   const hands = [
-    { ...base, date: '2026-01-01', net: -8, reachedShowdown: true, heroCardsShown: false },
+    { ...base, date: '2026-01-01', net: -8, reachedShowdown: true },
   ];
   const stats = aggregateStats(hands);
   const last = stats.timeline[stats.timeline.length - 1];
-  assert.strictEqual(last.cumulativeShowdown, 0, 'reachedShowdown=true alone must not put this in the showdown bucket');
-  assert.strictEqual(last.cumulativeNonShowdown, -8, 'heroCardsShown=false is what actually determines the bucket');
+  assert.strictEqual(last.cumulativeShowdown, -8, 'reachedShowdown=true alone is enough to land this in the showdown bucket, matching the standard definition');
+  assert.strictEqual(last.cumulativeNonShowdown, 0, 'a hand that structurally reached showdown must not fall into the non-showdown bucket');
 });
 
 test('handTimeline: one entry per hand (not per date), sorted chronologically, with the same showdown/non-showdown invariant', () => {
   const base = { bb: 1, vpip: true, pfr: true, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 0, isBombPot: false, position: 'BTN' };
   const hands = [
     // Deliberately out of chronological order, to confirm sorting happens.
-    { ...base, date: '2026-01-02', time: '10:00:00', net: 5, heroCardsShown: false },
-    { ...base, date: '2026-01-01', time: '09:00:00', net: 10, heroCardsShown: true },
-    { ...base, date: '2026-01-01', time: '18:00:00', net: -3, heroCardsShown: false },
+    { ...base, date: '2026-01-02', time: '10:00:00', net: 5, reachedShowdown: false },
+    // Ran hot on a genuine all-in: actual +10bb, but only "supposed to" be
+    // +6bb at the equity the money went in with (evAdjustmentBB: -4).
+    { ...base, date: '2026-01-01', time: '09:00:00', net: 10, reachedShowdown: true, evAdjustmentBB: -4 },
+    { ...base, date: '2026-01-01', time: '18:00:00', net: -3, reachedShowdown: false },
   ];
   const stats = aggregateStats(hands);
   assert.strictEqual(stats.handTimeline.length, 3, 'one entry per hand, not per date');
@@ -1469,31 +1776,53 @@ test('handTimeline: one entry per hand (not per date), sorted chronologically, w
   for (const h of stats.handTimeline) {
     assert.strictEqual(h.cumulativeShowdown + h.cumulativeNonShowdown, h.cumulative);
   }
+  // cumulativeEV: the first hand's EV result is 10 + (-4) = 6bb (i.e. $6 at
+  // bb=1), not its actual $10 — the other two hands have no adjustment, so
+  // they carry their actual net straight through.
+  assert.strictEqual(stats.handTimeline[0].cumulativeEV, 6);
+  assert.strictEqual(stats.handTimeline[1].cumulativeEV, 3);
+  assert.strictEqual(stats.handTimeline[2].cumulativeEV, 8);
 });
 
-test('aggregateStats: per-street aggression matches PokerTracker\'s documented AFq formula — (bets+raises) / (bets+raises+calls+folds), checks EXCLUDED — verified against a hand-computable example, not just plausibility', () => {
+test('aggregateStats: per-street Agg% (PT) matches PokerTracker 4\'s own per-street report — (bets+raises) / (bets+raises+calls+checks), FOLDS excluded — verified against a hand-computable example, not just plausibility', () => {
   const base = { bb: 1, vpip: true, pfr: true, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 0, isBombPot: false, position: 'BTN', net: 0 };
   const emptyStreet = { agg: 0, calls: 0, folds: 0, checks: 0 };
+  const streetHand = (flop) => ({ ...base, streetAgg: { FLOP: flop, TURN: emptyStreet, RIVER: emptyStreet } });
   const hands = [
-    { ...base, streetAgg: { FLOP: { agg: 1, calls: 0, folds: 0, checks: 0 }, TURN: emptyStreet, RIVER: emptyStreet } }, // flop bet
-    { ...base, streetAgg: { FLOP: { agg: 1, calls: 0, folds: 0, checks: 0 }, TURN: emptyStreet, RIVER: emptyStreet } }, // flop raise (bets and raises both count toward "agg")
-    { ...base, streetAgg: { FLOP: { agg: 0, calls: 1, folds: 0, checks: 0 }, TURN: emptyStreet, RIVER: emptyStreet } }, // flop call
-    { ...base, streetAgg: { FLOP: { agg: 0, calls: 0, folds: 1, checks: 0 }, TURN: emptyStreet, RIVER: emptyStreet } }, // flop fold
-    // AFq excludes checks from the denominator entirely — this hand's flop
-    // check must NOT move flopAggression or flopAggressionOpportunities.
-    { ...base, streetAgg: { FLOP: { agg: 0, calls: 0, folds: 0, checks: 1 }, TURN: emptyStreet, RIVER: emptyStreet } }, // flop check
+    streetHand({ agg: 1, calls: 0, folds: 0, checks: 0 }), // flop bet
+    streetHand({ agg: 1, calls: 0, folds: 0, checks: 0 }), // flop raise (bets and raises both count toward "agg")
+    streetHand({ agg: 1, calls: 0, folds: 0, checks: 0 }), // flop bet
+    streetHand({ agg: 0, calls: 1, folds: 0, checks: 0 }), // flop call
+    streetHand({ agg: 0, calls: 0, folds: 1, checks: 0 }), // flop fold
+    streetHand({ agg: 0, calls: 0, folds: 1, checks: 0 }), // flop fold
+    // Deliberately 2 folds and 2 checks (not equal counts of each, and not
+    // matching either count above) — this is what actually discriminates
+    // the corrected formula from the old one; a fixture where folds and
+    // checks happen to tie would pass under either formula and prove
+    // nothing.
+    streetHand({ agg: 0, calls: 0, folds: 0, checks: 1 }), // flop check
+    streetHand({ agg: 0, calls: 0, folds: 0, checks: 1 }), // flop check
   ];
   const stats = aggregateStats(hands);
-  // agg=2, calls=1, folds=1 -> 2 / (2+1+1) = 50%, over 4 opportunities —
-  // the check is tracked on the hand but excluded from this ratio.
+  // agg=3, calls=1, checks=2, folds excluded -> 3 / (3+1+2) = 50%, over 6
+  // opportunities — the two folds are tracked on the hands but excluded
+  // from this ratio, matching PokerTracker 4's own per-street "F/T/R Agg%"
+  // convention (see streetAggPct's comment in src/stats.js for the real
+  // PokerTracker report this was checked against).
   assert.strictEqual(stats.flopAggression, 50);
-  assert.strictEqual(stats.flopAggressionOpportunities, 4);
+  assert.strictEqual(stats.flopAggressionOpportunities, 6);
+  // Agg% (DriveHUD's convention): same agg=3, but now BOTH folds and checks
+  // count toward the denominator -> 3 / (3+1+2+2) = 37.5%, over 8 opportunities.
+  assert.strictEqual(stats.flopAggPct, 37.5);
+  assert.strictEqual(stats.flopAggPctOpportunities, 8);
   // Turn/river had zero opportunities anywhere in this fixture.
   assert.strictEqual(stats.turnAggression, null);
   assert.strictEqual(stats.turnAggressionOpportunities, 0);
+  assert.strictEqual(stats.turnAggPct, null);
+  assert.strictEqual(stats.turnAggPctOpportunities, 0);
 });
 
-test('analyzeHand: streetAgg is correctly populated from real hand text — a flop check is tracked in the raw counts even though AFq excludes it from the aggregation denominator', () => {
+test('analyzeHand: streetAgg is correctly populated from real hand text — a flop check is tracked in the raw counts (aggregateStats decides which aggression formula counts it, not analyzeHand)', () => {
   const hand = `Weplay Hand #900:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 18:00:00 UTC
 Table 'Test'(111) 6-max Seat #1 is the button
 Seat 1: PlayerA ($50 in chips)
@@ -1522,6 +1851,63 @@ Seat 2: Hero (big blind) collected ($1)`;
   assert.ok(result, 'hand should analyze successfully');
   assert.deepStrictEqual(result.streetAgg.FLOP, { agg: 0, calls: 0, folds: 0, checks: 1 }, 'the flop check is now tracked, not silently dropped');
   assert.deepStrictEqual(result.streetAgg.TURN, { agg: 1, calls: 0, folds: 0, checks: 0 }, 'the turn bet is one aggressive action');
+});
+
+// ── Rake ─────────────────────────────────────────────────────────────────
+// Weplay's raw "X collected $Y from pot" line states the PRE-rake amount
+// (confirmed against real data — see src/stats.js's distributeRakeReduction
+// comment), so net/rakePaid both need the SUMMARY line's stated rake
+// subtracted, not the raw collected figure used as-is.
+
+test('analyzeHand: rakePaid is the exact rake Weplay charged when hero is the sole winner, and net is rake-adjusted', () => {
+  // HAND_4BET_AS_RAISER: Hero collects $56 from a $56 pot, Rake $2.8, sole winner.
+  const r = analyzeHand(HAND_4BET_AS_RAISER, 'Hero');
+  assert.strictEqual(r.rakePaid, 2.8, 'sole winner pays the full stated rake, not a formula-derived guess');
+  // contributed: "raises $A to $B" tracks A as the increment ABOVE HERO'S
+  // OWN prior contribution this street, not relative to $B or to whichever
+  // bet is being raised over — confirmed against a real captured hand with
+  // a genuine same-player preflop re-raise (5.25 then 44.75, reaching
+  // exactly 5.25+44.75=50.00, the stated new total). So here: preflop
+  // 1.5 (first raise) + 12 (re-raise increment) + flop bet 10 = 23.5.
+  const contributed = 1.5 + 12 + 10;
+  assert.ok(Math.abs(r.net - (56 - 2.8 - contributed)) < 0.001, 'net reflects the rake-adjusted collected amount, not the raw pre-rake one');
+});
+
+test('analyzeHand: rakePaid is zero on a hand hero didn\'t collect from, even when real rake was taken', () => {
+  const hand = `Weplay Hand #900:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 18:30:00 UTC
+Table 'Test'(111) 3-max Seat #1 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: PlayerB ($100 in chips)
+Seat 3: PlayerC ($100 in chips)
+PlayerB: posts small blind $0.25
+PlayerC: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+Hero: raises $1.5 to $1.5
+PlayerB: folds
+PlayerC: calls $1
+*** FLOP *** [Kh Qh 2d]
+PlayerC: bets $2
+Hero: folds
+Uncalled bet ($0) returned to PlayerC
+*** SHOW DOWN ***
+PlayerC collected $5.70 from pot
+*** SUMMARY ***
+Total pot $6 | Rake $0.30
+Seat 1: Hero folded on the Flop
+Seat 2: PlayerB (small blind) folded before Flop
+Seat 3: PlayerC (big blind) collected ($5.70)`;
+  const r = analyzeHand(hand, 'Hero');
+  assert.strictEqual(r.rakePaid, 0, 'rake only ever reduces a winner\'s payout — Hero folded, so none of it was billed to them');
+});
+
+test('aggregateStats: totalRakePaid sums rakePaid the same way netResult sums net', () => {
+  const hands = [
+    { ...analyzeHand(HAND_4BET_AS_RAISER, 'Hero'), isBombPot: false },
+    { ...analyzeHand(HAND_4BET_AS_CALLER, 'Hero'), isBombPot: false },
+  ];
+  const stats = aggregateStats(hands);
+  assert.ok(Math.abs(stats.totalRakePaid - 5.6) < 0.001, 'two hands at $2.80 rake each, Hero the sole winner both times');
 });
 
 console.log(`\n${passed} test(s) passed.`);

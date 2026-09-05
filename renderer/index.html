@@ -6,6 +6,17 @@
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- Present in the static markup, not toggled on by JS — this is the very
+       first thing painted (before any script runs, before the DB has been
+       queried), replacing what used to be a bare, unstyled flash of the page
+       shell while the initial hands/stats fetch was still in flight. Hidden
+       once loadHandsAndStats() finishes its first run (see renderer.js). -->
+  <div id="bootOverlay" class="boot-overlay">
+    <span class="logo-mark boot-overlay-logo">W</span>
+    <div class="spinner"></div>
+    <p class="loading-text">Loading your hands…</p>
+  </div>
+
   <header class="app-header">
     <div class="logo">
       <span class="logo-mark">W</span>
@@ -18,8 +29,13 @@
 
   <section class="filters-bar">
     <div class="filter-field">
-      <label for="filterPlayer">Player</label>
-      <select id="filterPlayer"></select>
+      <label for="filterPlayerSearch">Player</label>
+      <div class="player-search-wrap">
+        <input type="text" id="filterPlayerSearch" autocomplete="off" placeholder="Search player…" />
+        <span class="player-search-arrow" aria-hidden="true">▾</span>
+        <select id="filterPlayer"></select>
+        <div id="filterPlayerDropdown" class="player-search-dropdown hidden"></div>
+      </div>
     </div>
     <div class="filter-field">
       <label for="filterDateFrom">From</label>
@@ -54,7 +70,7 @@
       </select>
     </div>
     <div class="filter-field">
-      <label for="filterWtsd">Went to Showdown</label>
+      <label for="filterWtsd">Showdown</label>
       <select id="filterWtsd">
         <option value="">Both</option>
         <option value="shown">Yes</option>
@@ -70,30 +86,119 @@
       </select>
     </div>
     <div class="filter-field">
-      <label for="filterPotBbMin">Pot (BB) min</label>
-      <input type="number" id="filterPotBbMin" placeholder="e.g. 10" min="0" step="0.5" class="filter-pot-input" />
+      <label for="filterIncludeBombPots" title="When set to No, bomb pot hands are excluded everywhere — stats, table, graph, and export">Include BP</label>
+      <select id="filterIncludeBombPots">
+        <option value="yes">Yes</option>
+        <option value="no">No</option>
+      </select>
     </div>
-    <div class="filter-field">
-      <label for="filterPotBbMax">Pot (BB) max</label>
-      <input type="number" id="filterPotBbMax" placeholder="e.g. 25" min="0" step="0.5" class="filter-pot-input" />
+    <button id="advancedFiltersToggle" class="btn btn-ghost btn-tiny" aria-expanded="false" aria-controls="advancedFiltersPanel" title="Advanced Filters">Filters ▾</button>
+    <button id="filterResetBtn" class="btn btn-ghost btn-tiny" title="Reset filters">Reset</button>
+  </section>
+
+  <!-- Collapsed by default — the same "Common Filters" / "Actions and
+       Opportunities" set PokerTracker/Hold'em Manager/Hand2Note treat as
+       standard, all reusing stats the engine already computes per hand (see
+       src/handStore.js buildHandRecords) and the same 3-way Both/Yes/No
+       control the Went to Showdown / Saw Flop filters above already use. -->
+  <section id="advancedFiltersPanel" class="advanced-filters-panel hidden">
+    <div class="advanced-filters-group">
+      <h3 class="advanced-filters-group-title">Preflop</h3>
+      <div class="filter-field"><label for="filterVpip">VPIP</label><select id="filterVpip"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterPfr">PFR</label><select id="filterPfr"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterRfi">RFI</label><select id="filterRfi"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterColdCall">Cold Call</label><select id="filterColdCall"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterLimped">Limped</label><select id="filterLimped"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterThreeBet">3-Bet</label><select id="filterThreeBet"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToThreeBet">Fold to 3-Bet</label><select id="filterFoldedToThreeBet"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFourBet">4-Bet</label><select id="filterFourBet"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToFourBet">Fold to 4-Bet</label><select id="filterFoldedToFourBet"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterSqueeze">Squeeze</label><select id="filterSqueeze"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
     </div>
-    <div class="filter-field filter-search">
-      <label for="filterSearch">Search</label>
-      <input type="text" id="filterSearch" placeholder="Hand ID, file, cards…" />
+
+    <div class="advanced-filters-group">
+      <h3 class="advanced-filters-group-title">Steal &amp; Check-Raise</h3>
+      <div class="filter-field"><label for="filterAttemptSteal">Attempt Steal</label><select id="filterAttemptSteal"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToSteal">Fold to Steal</label><select id="filterFoldedToSteal"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterCheckRaiseFlop">Flop Check-Raise</label><select id="filterCheckRaiseFlop"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterCheckRaiseTurn">Turn Check-Raise</label><select id="filterCheckRaiseTurn"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterCheckRaiseRiver">River Check-Raise</label><select id="filterCheckRaiseRiver"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
     </div>
-    <button id="filterResetBtn" class="btn btn-ghost btn-tiny">Reset filters</button>
+
+    <div class="advanced-filters-group">
+      <h3 class="advanced-filters-group-title">C-Bet</h3>
+      <div class="filter-field"><label for="filterCbetFlop">Flop C-Bet</label><select id="filterCbetFlop"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterCbetTurn">Turn C-Bet</label><select id="filterCbetTurn"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterCbetRiver">River C-Bet</label><select id="filterCbetRiver"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToCbetFlop">Fold to Flop C-Bet</label><select id="filterFoldedToCbetFlop"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToCbetTurn">Fold to Turn C-Bet</label><select id="filterFoldedToCbetTurn"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterFoldedToCbetRiver">Fold to River C-Bet</label><select id="filterFoldedToCbetRiver"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <!-- Doesn't thematically belong under C-Bet — parked here so the panel
+           stays at its established 4-column grid instead of a 5th group
+           wrapping into an awkward half-empty row. Revisit if this filter
+           group grows enough to earn its own column. -->
+      <div class="advanced-filters-sep"></div>
+      <div class="filter-field">
+        <label for="filterVsPlayer">Vs Player</label>
+        <input type="text" id="filterVsPlayer" list="allPlayersDatalist" placeholder="Opponent name…" title="Hands where the selected player and this player both saw the flop together" />
+        <datalist id="allPlayersDatalist"></datalist>
+      </div>
+    </div>
+
+    <div class="advanced-filters-group">
+      <h3 class="advanced-filters-group-title">Result &amp; Game</h3>
+      <div class="filter-field"><label for="filterWonAtShowdown">Won at Showdown</label><select id="filterWonAtShowdown"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterWonWhenSawFlop">Won when Saw Flop</label><select id="filterWonWhenSawFlop"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterRunItTwice">Run It Twice</label><select id="filterRunItTwice"><option value="">Both</option><option value="yes">Yes</option><option value="no">No</option></select></div>
+      <div class="filter-field"><label for="filterPotBbMin">Pot (BB) min</label><input type="number" id="filterPotBbMin" placeholder="e.g. 10" min="0" step="0.5" class="filter-pot-input" /></div>
+      <div class="filter-field"><label for="filterPotBbMax">Pot (BB) max</label><input type="number" id="filterPotBbMax" placeholder="e.g. 25" min="0" step="0.5" class="filter-pot-input" /></div>
+      <div class="filter-field"><label for="filterStackBbMin">Stack (BB) min</label><input type="number" id="filterStackBbMin" placeholder="e.g. 40" min="0" step="1" class="filter-pot-input" /></div>
+      <div class="filter-field"><label for="filterStackBbMax">Stack (BB) max</label><input type="number" id="filterStackBbMax" placeholder="e.g. 150" min="0" step="1" class="filter-pot-input" /></div>
+      <div class="filter-field"><label for="filterStakesBbMin">Stakes (BB) min</label><input type="number" id="filterStakesBbMin" placeholder="e.g. 0.5" min="0" step="0.05" class="filter-pot-input" /></div>
+      <div class="filter-field"><label for="filterStakesBbMax">Stakes (BB) max</label><input type="number" id="filterStakesBbMax" placeholder="e.g. 5" min="0" step="0.05" class="filter-pot-input" /></div>
+    </div>
   </section>
 
   <nav class="tab-nav">
     <div class="tab-nav-inner">
-      <button class="tab-btn active" data-tab="hands">Hands</button>
-      <button class="tab-btn" data-tab="graph">Advanced Graph</button>
-      <button class="tab-btn" data-tab="import">Import Hands</button>
+      <button class="tab-btn active" data-tab="hands">Player Overview</button>
+      <button class="tab-btn" data-tab="graph">Advanced Stats</button>
+      <button class="tab-btn" data-tab="import">Import/Export Hands</button>
     </div>
   </nav>
 
   <main>
     <div id="tabImport" class="tab-content">
+    <section id="liveSyncSection" class="live-sync-section">
+      <div class="section-head">
+        <h2>Live Sync</h2>
+        <span id="liveSyncStatusBadge" class="live-sync-badge live-sync-off">Off</span>
+      </div>
+      <p class="hero-note">Watches the folder Weplay writes hand histories to and imports new hands automatically while you play, table by table — no manual import needed after a session.</p>
+      <div class="options live-sync-controls">
+        <div class="filter-field live-sync-folder-field">
+          <label for="liveSyncFolderPath">Folder</label>
+          <input type="text" id="liveSyncFolderPath" placeholder="Not set" readonly />
+        </div>
+        <button id="liveSyncChooseFolderBtn" class="btn btn-ghost">Choose Folder…</button>
+        <button id="liveSyncToggleBtn" class="btn btn-primary" disabled>Start Live Sync</button>
+        <button id="liveSyncRefreshNowBtn" class="btn btn-ghost" title="Refresh the Hands table, Stats, and Graph right now, without waiting for the next auto-detected change">Refresh Now</button>
+      </div>
+      <p id="liveSyncStatusText" class="live-sync-status-text"></p>
+    </section>
+
+    <section id="hudOverlaySection" class="live-sync-section">
+      <div class="section-head">
+        <h2>Table HUD</h2>
+        <span id="hudOverlayStatusBadge" class="live-sync-badge live-sync-off">Off</span>
+      </div>
+      <p class="hero-note">Shows a live stat overlay on each open Weplay table while you play — VPIP, PFR, 3-Bet, and more for every opponent, read straight from this database. Needs Live Sync turned on above (same live files, no separate folder to pick).</p>
+      <div class="options live-sync-controls">
+        <button id="hudOverlayToggleBtn" class="btn btn-primary">Start Table HUD</button>
+      </div>
+      <p id="hudOverlayStatusText" class="live-sync-status-text"></p>
+    </section>
+
     <section id="dropzone" class="dropzone">
       <div class="dropzone-inner">
         <p class="dropzone-title">Drag &amp; drop Weplay hand history .txt files (or a .zip of them) here</p>
@@ -112,13 +217,6 @@
         <button id="fileSummaryToggle" class="btn btn-ghost btn-tiny">Show files</button>
       </div>
       <ul id="fileList" class="file-list hidden"></ul>
-    </section>
-
-    <section class="options">
-      <label class="checkbox-row">
-        <input type="checkbox" id="replaceHeroToggle" checked />
-        <span>Replace my username with <code>Hero</code> in the output (matches CoinPoker's own export convention)</span>
-      </label>
     </section>
 
     <section class="actions">
@@ -150,6 +248,16 @@
             </select>
           </div>
         </div>
+        <div class="options">
+          <label class="checkbox-row">
+            <input type="checkbox" id="exportReplaceHeroToggle" checked />
+            <span>Replace my username with <code>Hero</code> in the output (only applies to the CoinPoker format)</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="exportExcludeBombPotsToggle" checked title="Excludes Bomb Pot hands from this export regardless of the Include BP filter above — uncheck to follow that filter's current Yes/No setting instead" />
+            <span>Exclude Bomb Pot hands in the output</span>
+          </label>
+        </div>
         <div class="actions">
           <button id="exportBtn" class="btn btn-secondary btn-large">Export Filtered Hands</button>
         </div>
@@ -177,7 +285,7 @@
 
       <section id="statsSection" class="stats-overview">
         <div class="stats-overview-head">
-          <h2>Stats</h2>
+          <h2>Overview</h2>
           <span id="statsHeroLabel" class="stats-hero-label"></span>
         </div>
         <div class="stats-overview-grid">
@@ -203,12 +311,14 @@
               <option value="pot">Pot</option>
               <option value="net">Net</option>
               <option value="wtsd">WTSD</option>
+              <option value="starred">Starred</option>
             </select>
             <button id="handsSortDirBtn" class="btn btn-ghost btn-tiny" title="Toggle ascending/descending">▼ Descending</button>
           </div>
           <div class="hands-table-wrap">
             <table id="handsTable" class="data-table hands-data-table">
               <colgroup>
+                <col id="colStar" style="width: 92px;">
                 <col id="colDate" style="width: 100px;">
                 <col id="colTime" style="width: 85px;">
                 <col id="colStakes" style="width: 90px;">
@@ -244,22 +354,31 @@
     </div>
 
     <div id="tabGraph" class="tab-content">
+      <section id="hudSection" class="hud-section">
+        <div class="section-head">
+          <h2>Stat Breakdown</h2>
+          <span id="hudHeroLabel" class="stats-hero-label"></span>
+        </div>
+        <div id="hudTable" class="hud-table"></div>
+      </section>
+
       <section id="advancedGraphSection" class="advanced-graph-section">
         <div class="section-head">
-          <h2>Advanced Graph</h2>
+          <h2>Results Graph</h2>
           <span id="advancedGraphLabel" class="stats-hero-label"></span>
         </div>
         <div class="graph-legend">
           <span id="legendTotal" class="graph-legend-item"><span class="graph-legend-swatch swatch-total"></span>Total Profit</span>
           <span id="legendShowdown" class="graph-legend-item"><span class="graph-legend-swatch swatch-showdown"></span>Went to Showdown</span>
           <span id="legendNonShowdown" class="graph-legend-item"><span class="graph-legend-swatch swatch-nonshowdown"></span>No Showdown</span>
+          <span id="legendEV" class="graph-legend-item"><span class="graph-legend-swatch swatch-ev"></span>EV Adjusted</span>
         </div>
         <div id="advancedGraphChart" class="advanced-graph-chart"></div>
       </section>
     </div>
   </main>
 
-  <footer class="app-footer">
+  <footer id="appFooter" class="app-footer">
     <p id="statsCaveat" class="stats-caveat"></p>
   </footer>
 

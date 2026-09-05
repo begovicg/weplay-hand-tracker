@@ -1,6 +1,6 @@
 {
   "name": "weplay-hand-tracker",
-  "version": "0.9.3",
+  "version": "1.2.0",
   "description": "A hand history manager for Weplay poker — import, browse, filter, and review your hands, plus convert them into CoinPoker format for Hand2Note / PokerTracker.",
   "main": "main.js",
   "private": true,
@@ -11,7 +11,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "set NODE_ENV=development && electron .",
-    "test": "node test/converter.test.js && node test/stats.test.js && node test/zipReader.test.js && node test/handStore.test.js && node test/handReplay.test.js && node test/handEvaluator.test.js && node test/equity.test.js && node test/evAnalysis.test.js && node test/chartMath.test.js",
+    "test": "node test/converter.test.js && node test/stats.test.js && node test/zipReader.test.js && node test/handStore.test.js && node test/handReplay.test.js && node test/handEvaluator.test.js && node test/equity.test.js && node test/evAnalysis.test.js && node test/chartMath.test.js && node test/liveSync.test.js && node test/windowFinder.test.js && node test/hudOverlay.test.js",
     "dist": "electron-builder --win"
   },
   "devDependencies": {
@@ -29,6 +29,7 @@
       "main.js",
       "preload.js",
       "handDetailPreload.js",
+      "hudOverlayPreload.js",
       "src/**/*",
       "renderer/**/*",
       "build/icon.png",

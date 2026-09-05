@@ -7,7 +7,8 @@ const path = require('path');
 const { openDatabase } = require('../src/db');
 const {
   buildHandRecords, importFileIntoStore, queryHands, getDistinctValues, getHandById,
-  queryRawHandsForStats, getTotalHandCount, backfillDeepStats,
+  queryRawHandsForStats, getTotalHandCount, backfillDeepStats, backfillEVAdjustments,
+  setHandStarred, getLiveHudStats,
 } = require('../src/handStore');
 const { splitHands } = require('../src/converter');
 const { analyzeHand } = require('../src/stats');
@@ -81,7 +82,7 @@ Total pot $2 | Rake $0
 Seat 1: Hero (big blind) collected ($2)
 Seat 2: PlayerB (small blind) folded before Flop`;
 
-test('queryHands filters by table category, stakes, date range, and search', () => {
+test('queryHands filters by table category, stakes, and date range', () => {
   const { db } = tmpDb();
   importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}\n\n${HAND_C}`, 'file1.txt', { replaceHeroName: true }, splitHands);
 
@@ -95,10 +96,27 @@ test('queryHands filters by table category, stakes, date range, and search', () 
 
   const byDate = queryHands(db, { dateFrom: '2026-07-06' });
   assert.strictEqual(byDate.total, 2);
+});
 
-  const bySearch = queryHands(db, { search: '100' });
-  assert.strictEqual(bySearch.total, 1);
-  assert.strictEqual(bySearch.hands[0].handId, '100');
+// "Vs Player" — narrows the perspective player's hands to ones they went
+// postflop with a specific named opponent. HAND_A: PlayerA calls preflop,
+// Hero (BB) checks to the flop, PlayerA folds there — both saw_flop = 1.
+// HAND_B and HAND_C both end preflop (a fold with the bet returned
+// uncalled) — no flop is ever dealt in either, so saw_flop is 0 for
+// everyone in both, including Hero.
+test('queryHands vsPlayer: only matches hands where the perspective player AND the named opponent both saw the flop', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_B}\n\n${HAND_C}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const vsPlayerA = queryHands(db, { vsPlayer: 'PlayerA' });
+  assert.strictEqual(vsPlayerA.total, 1, 'only HAND_A has both Hero and PlayerA reaching the flop together');
+  assert.strictEqual(vsPlayerA.hands[0].handId, '100');
+
+  const vsPlayerB = queryHands(db, { vsPlayer: 'PlayerB' });
+  assert.strictEqual(vsPlayerB.total, 0, 'Hero never saw a flop in either hand PlayerB was seated in');
+
+  const vsNobody = queryHands(db, { vsPlayer: 'NotASeatedPlayer' });
+  assert.strictEqual(vsNobody.total, 0);
 });
 
 test('queryHands paginates via offset/limit and sorts newest-first by default', () => {
@@ -301,6 +319,13 @@ test('reopening the same database file preserves everything written to it', () =
   const db2 = openDatabase(dbPath);
   const q = queryHands(db2, {});
   assert.strictEqual(q.total, 2);
+  // db2 must be closed before the directory is removed — on Windows an
+  // open SQLite file handle blocks deleting the directory that contains
+  // it (POSIX allows unlinking an open file; Windows doesn't), which is
+  // exactly what was causing an EPERM here and aborting the rest of this
+  // file's tests (and, since npm test chains files with &&, every test
+  // file listed after this one too).
+  db2.close();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -366,6 +391,84 @@ test('queryHands: "Went to showdown" filter is three-way (shown / not-shown / bo
 
   const both = queryHands(db, {});
   assert.strictEqual(both.total, 2, 'no wentToShowdown filter (or any other value) should return everything');
+});
+
+// A genuine 2-way showdown where the LOSER mucks instead of showing — very
+// common (no reason to reveal a losing hand). PlayerB reaches a real
+// showdown here (checks the flop, stays in through SHOW DOWN) but has no
+// "shows" line of their own, only "mucks hand".
+const HAND_SHOWDOWN_MUCKED_LOSER = `Weplay Hand #302:  Hold'em No Limit ($0.5/$1) - 2026/07/08 12:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: PlayerB ($100 in chips)
+Hero: posts small blind $0.5
+PlayerB: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [Ah Ad]
+Hero: raises $19 to $19.5
+PlayerB: calls $18.5
+*** FLOP *** [2c 7d 9s]
+PlayerB: checks
+Hero: checks
+*** SHOW DOWN ***
+Hero: shows [Ah Ad] (One Pair)
+PlayerB: mucks hand
+Hero collected $40 from pot
+*** SUMMARY ***
+Total pot $40 | Rake $0
+Board [2c 7d 9s]
+Seat 1: Hero (small blind) showed [Ah Ad] and won ($40) with One Pair
+Seat 2: PlayerB (big blind) mucked`;
+
+test('queryHands: "Went to showdown" filter counts a genuine showdown reached even when the loser mucks instead of showing — not just literal `shows` lines', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_SHOWDOWN_MUCKED_LOSER, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  // From PlayerB's own perspective: they never have a `shows` line, but they
+  // genuinely stayed in through a real 2-way showdown — "Showdown: Yes"
+  // should find them, and "Showdown: No" must NOT (the bug this regression
+  // guards: the old definition only checked for a literal `shows` line,
+  // which silently missed every mucked-loser showdown like this one).
+  const shown = queryHands(db, { perspectivePlayer: 'PlayerB', wentToShowdown: 'shown' });
+  assert.strictEqual(shown.total, 1, 'PlayerB genuinely reached showdown, even without a shows line');
+
+  const notShown = queryHands(db, { perspectivePlayer: 'PlayerB', wentToShowdown: 'not-shown' });
+  assert.strictEqual(notShown.total, 0, 'a mucked-at-showdown loss must not be miscounted as "never went to showdown"');
+});
+
+const HAND_BOMB_POT = `Weplay Hand #303:  Hold'em No Limit ($0.25/$0.50) - 2026/07/08 13:00:00 UTC
+Table 'Bomb Pot'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts the ante $1.5
+Hero: posts the ante $1.5
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+*** FLOP *** [Ah Kh Qh]
+Hero: checks
+PlayerA: checks
+*** SHOW DOWN ***
+PlayerA: shows [Jh Th] (a straight flush)
+Hero: mucks hand
+PlayerA collected $3 from pot
+*** SUMMARY ***
+Total pot $3 | Rake $0
+Seat 1: PlayerA showed [Jh Th] and won ($3) with a straight flush
+Seat 2: Hero mucked`;
+
+test('queryHands: "Include Bomb Pots" toggle excludes bomb pot hands everywhere it applies (table/stats/graph/export all share this same query)', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, `${HAND_A}\n\n${HAND_BOMB_POT}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const withBombPots = queryHands(db, {});
+  assert.strictEqual(withBombPots.total, 2, 'default (no includeBombPots key, matching the checked checkbox) includes everything');
+
+  const withoutBombPots = queryHands(db, { includeBombPots: false });
+  assert.strictEqual(withoutBombPots.total, 1, 'unchecked excludes the bomb pot hand specifically');
+  assert.strictEqual(withoutBombPots.hands[0].handId, '100', 'the remaining hand is the non-bomb-pot one');
+
+  const rawRows = queryRawHandsForStats(db, { includeBombPots: false });
+  assert.strictEqual(rawRows.length, 1, 'queryRawHandsForStats (stats/graph/export) shares the same WHERE clause, so it is excluded there too');
 });
 
 test('queryHands: pot size filter, in big blinds, converts against each hand\'s own bb_stake', () => {
@@ -491,6 +594,447 @@ test('export round-trip: hands exported via queryRawHandsForStats (the same buil
 
   const reimportedTotal = queryHands(freshDb, {});
   assert.strictEqual(reimportedTotal.total, 3);
+});
+
+// A clean preflop AA vs KK all-in (same fixture shape as evAnalysis.test.js)
+// — Hero wins the whole $200 pot with only ~81.2% equity, so this hand has a
+// real, strongly-nonzero EV adjustment to mirror onto Villain.
+const HAND_ALLIN_AA_VS_KK = `Weplay Hand #500:  Hold'em No Limit ($0.5/$1) - 2026/07/09 18:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: Villain ($100 in chips)
+Hero: posts small blind $0.5
+Villain: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [Ac Ad]
+Hero: raises $99.5 to $100 and is all-in
+Villain: calls $99 and is all-in
+*** FLOP *** [2h 7d Jc]
+*** TURN *** [2h 7d Jc] [4s]
+*** RIVER *** [2h 7d Jc 4s] [9h]
+*** SHOW DOWN ***
+Hero: shows [Ac Ad] (One Pair)
+Villain: shows [Kh Ks] (One Pair)
+Hero collected $200 from pot
+*** SUMMARY ***
+Total pot $200 | Rake $0
+Board [2h 7d Jc 4s 9h]
+Seat 1: Hero showed [Ac Ad] and won ($200) with One Pair
+Seat 2: Villain showed [Kh Ks] and lost with One Pair`;
+
+test('buildHandRecords: a genuine 2-player all-in mirrors the EV adjustment onto the villain\'s row, not just hero\'s — the bug where every non-hero player\'s EV winrate trivially equaled their actual winrate', () => {
+  const { players } = buildHandRecords(HAND_ALLIN_AA_VS_KK, 'file1.txt', {});
+  const hero = players.find((p) => p.playerName === 'Hero');
+  const villain = players.find((p) => p.playerName === 'Villain');
+
+  assert.strictEqual(typeof hero.evAdjustmentBB, 'number', 'hero has a real EV adjustment for this all-in');
+  assert.ok(hero.evAdjustmentBB < -30, `hero ran well above their ~81% equity, expected a strongly negative adjustment, got ${hero.evAdjustmentBB}`);
+
+  assert.strictEqual(typeof villain.evAdjustmentBB, 'number', 'villain must NOT be left null — they were the other half of this exact all-in');
+  // Exact negation, not approximate — see the comment on computeHandEVAdjustment
+  // in evAnalysis.js for why this identity is provable, not estimated.
+  assert.strictEqual(villain.evAdjustmentBB, -hero.evAdjustmentBB);
+});
+
+test('buildHandRecords: a normal (non-all-in) hand leaves every seated player\'s EV adjustment null, hero and non-hero alike', () => {
+  const normalHand = `Weplay Hand #501:  Hold'em No Limit ($0.5/$1) - 2026/07/09 18:05:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: Villain ($100 in chips)
+Hero: posts small blind $0.5
+Villain: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [Ac Ad]
+Hero: raises $2 to $2.5
+Villain: calls $1.5
+*** FLOP *** [2h 7d Jc]
+Villain: checks
+Hero: bets $3
+Villain: folds
+Uncalled bet ($3) returned to Hero
+*** SHOW DOWN ***
+Hero collected $6 from pot
+*** SUMMARY ***
+Total pot $6 | Rake $0
+Board [2h 7d Jc]
+Seat 1: Hero (small blind) collected ($6)
+Seat 2: Villain (big blind) folded on the Flop`;
+  const { players } = buildHandRecords(normalHand, 'file1.txt', {});
+  for (const p of players) {
+    assert.strictEqual(p.evAdjustmentBB, null, `${p.playerName} should have no EV adjustment — no all-in happened`);
+  }
+});
+
+// The scenario this whole EV-adjustment feature was missing: hero folds
+// before the all-in, and it happens between the two OTHER seated players
+// (PlayerB with AA, PlayerC with KK — the same known ~81.2% spot). Both of
+// them are non-hero, so this is the case an earlier hero-anchored version of
+// findAllInSpot silently skipped entirely.
+const HAND_ALLIN_BETWEEN_NON_HERO_PLAYERS = `Weplay Hand #502:  Hold'em No Limit ($0.5/$1) - 2026/07/09 18:10:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: Hero ($100 in chips)
+Seat 2: PlayerB ($100 in chips)
+Seat 3: PlayerC ($100 in chips)
+PlayerB: posts small blind $0.5
+PlayerC: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+Hero: folds
+PlayerB: raises $99.5 to $100 and is all-in
+PlayerC: calls $99 and is all-in
+*** FLOP *** [2h 7d Jc]
+*** TURN *** [2h 7d Jc] [4s]
+*** RIVER *** [2h 7d Jc 4s] [9h]
+*** SHOW DOWN ***
+PlayerB: shows [Ac Ad] (One Pair)
+PlayerC: shows [Kh Ks] (One Pair)
+PlayerB collected $200 from pot
+*** SUMMARY ***
+Total pot $200 | Rake $0
+Board [2h 7d Jc 4s 9h]
+Seat 1: Hero folded before Flop
+Seat 2: PlayerB showed [Ac Ad] and won ($200) with One Pair
+Seat 3: PlayerC showed [Kh Ks] and lost with One Pair`;
+
+test('buildHandRecords: an all-in between two non-hero players (hero folded first) gets a real EV adjustment for both of them — this is the bug the user actually reported', () => {
+  const { players } = buildHandRecords(HAND_ALLIN_BETWEEN_NON_HERO_PLAYERS, 'file1.txt', {});
+  const hero = players.find((p) => p.playerName === 'Hero');
+  const playerB = players.find((p) => p.playerName === 'PlayerB');
+  const playerC = players.find((p) => p.playerName === 'PlayerC');
+
+  assert.strictEqual(hero.evAdjustmentBB, null, 'hero folded before the all-in — correctly no adjustment for them');
+  assert.strictEqual(typeof playerB.evAdjustmentBB, 'number', 'PlayerB must NOT be left null just because hero wasn\'t involved');
+  assert.strictEqual(typeof playerC.evAdjustmentBB, 'number', 'same for PlayerC');
+  assert.ok(playerB.evAdjustmentBB < -30, `PlayerB (AA) won it all with only ~81% equity, expected a strongly negative adjustment, got ${playerB.evAdjustmentBB}`);
+  assert.strictEqual(playerC.evAdjustmentBB, -playerB.evAdjustmentBB, 'exact negation, same identity as any other 2-player all-in');
+});
+
+test('backfillEVAdjustments: fixes both the old hero-only mirroring gap AND hands where hero was never part of the all-in at all', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(
+    db,
+    `${HAND_ALLIN_AA_VS_KK}\n\n${HAND_ALLIN_BETWEEN_NON_HERO_PLAYERS}`,
+    'file1.txt',
+    { replaceHeroName: true },
+    splitHands,
+  );
+
+  const heroBefore = db.prepare("SELECT ev_adjustment_bb FROM hand_players WHERE hand_id = '500' AND player_name = 'Hero'").get();
+  assert.strictEqual(typeof heroBefore.ev_adjustment_bb, 'number', 'sanity check: this fixture really does qualify for an EV adjustment');
+
+  // Simulate a database from BEFORE either fix: hand 500's villain was never
+  // mirrored (old hero-only code only ever wrote hero's row), and hand 502
+  // was skipped entirely — hero-anchored findAllInSpot never even recognized
+  // it as an all-in, so every seated player in it stayed NULL.
+  db.exec("UPDATE hand_players SET ev_adjustment_bb = NULL WHERE hand_id = '500' AND player_name = 'Villain'");
+  db.exec("UPDATE hand_players SET ev_adjustment_bb = NULL WHERE hand_id = '502'");
+
+  const fixed = backfillEVAdjustments(db);
+  assert.strictEqual(fixed, 2, 'both qualifying hands get fixed in one pass');
+
+  // Hand 500 gets fully recomputed (fresh Monte Carlo), not just "mirror
+  // villain off whatever hero's row already said" — so hero's OWN row can
+  // shift slightly too (a different, equally valid equity sample), which is
+  // why this checks the post-backfill pair against each other, not against
+  // heroBefore's now-superseded number. The negation identity is what's
+  // actually guaranteed here, not byte-for-byte preservation of the old
+  // Monte Carlo draw.
+  const heroAfter = db.prepare("SELECT ev_adjustment_bb FROM hand_players WHERE hand_id = '500' AND player_name = 'Hero'").get();
+  const villainAfter = db.prepare("SELECT ev_adjustment_bb FROM hand_players WHERE hand_id = '500' AND player_name = 'Villain'").get();
+  assert.strictEqual(typeof heroAfter.ev_adjustment_bb, 'number');
+  assert.strictEqual(villainAfter.ev_adjustment_bb, -heroAfter.ev_adjustment_bb, 'hand 500: villain\'s value is the exact negation of the freshly recomputed hero value');
+
+  const playerBAfter = db.prepare("SELECT ev_adjustment_bb FROM hand_players WHERE hand_id = '502' AND player_name = 'PlayerB'").get();
+  const playerCAfter = db.prepare("SELECT ev_adjustment_bb FROM hand_players WHERE hand_id = '502' AND player_name = 'PlayerC'").get();
+  assert.strictEqual(typeof playerBAfter.ev_adjustment_bb, 'number', 'hand 502: PlayerB is fixed even though hero was never part of this all-in');
+  assert.strictEqual(playerCAfter.ev_adjustment_bb, -playerBAfter.ev_adjustment_bb);
+  const heroRowFor502 = db.prepare("SELECT ev_adjustment_bb FROM hand_players WHERE hand_id = '502' AND player_name = 'Hero'").get();
+  assert.strictEqual(heroRowFor502.ev_adjustment_bb, null, 'hero folded before the all-in in hand 502 — correctly stays null');
+
+  // Idempotent — a second call finds every qualifying hand already resolved
+  // (see the function's own comment for why this scan isn't a zero-row
+  // no-op the way backfillDeepStats' is, but still does no real work here).
+  assert.strictEqual(backfillEVAdjustments(db), 0);
+});
+
+// ── Shared/pooled database: two different people's own exports of the SAME
+// hand ── ────────────────────────────────────────────────────────────────
+// The scenario a multi-person pool actually needs: PlayerA and Hero shared
+// a table for hand #100 (same fixture shape as HAND_A above, reused
+// deliberately). Each one's own client only ever reveals THEIR OWN hole
+// cards via "Dealt to X [cards]" — the other player folded without ever
+// showing, so nobody's export can see the other's hand. The two files are
+// otherwise byte-for-byte identical (same public board/actions/pot), which
+// is exactly what two real people's exports of one real hand look like.
+const HAND_A_FROM_HERO_PERSPECTIVE = HAND_A; // already has "Dealt to Hero [Ah Kh]"
+const HAND_A_FROM_PLAYERA_PERSPECTIVE = HAND_A.replace('Dealt to Hero [Ah Kh]', 'Dealt to PlayerA [Qc Qd]');
+
+test('importFileIntoStore: importing the SAME hand from a second person\'s own file merges hole cards/is_hero instead of clobbering the first person\'s data', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A_FROM_HERO_PERSPECTIVE, 'hero-file.txt', { replaceHeroName: true }, splitHands);
+
+  const heroAfterFirst = db.prepare("SELECT is_hero, hole_cards FROM hand_players WHERE hand_id = '100' AND player_name = 'Hero'").get();
+  assert.strictEqual(heroAfterFirst.is_hero, 1);
+  assert.strictEqual(heroAfterFirst.hole_cards, 'Ah Kh');
+  const playerAAfterFirst = db.prepare("SELECT is_hero, hole_cards FROM hand_players WHERE hand_id = '100' AND player_name = 'PlayerA'").get();
+  assert.strictEqual(playerAAfterFirst.is_hero, 0);
+  assert.strictEqual(playerAAfterFirst.hole_cards, null, 'PlayerA folded without showing — genuinely unknown from Hero\'s own file alone');
+
+  // Now PlayerA's own file for the exact same hand arrives — a real second
+  // person building a shared pool, not a re-import of the same file.
+  importFileIntoStore(db, HAND_A_FROM_PLAYERA_PERSPECTIVE, 'playerA-file.txt', { replaceHeroName: false }, splitHands);
+
+  const heroAfterSecond = db.prepare("SELECT is_hero, hole_cards FROM hand_players WHERE hand_id = '100' AND player_name = 'Hero'").get();
+  // The actual bug this guards against: a naive delete-then-reinsert would
+  // null Hero's hole cards out here, since PlayerA's file never saw them.
+  assert.strictEqual(heroAfterSecond.hole_cards, 'Ah Kh', 'Hero\'s hole cards must survive being imported over by a file that can\'t see them');
+  assert.strictEqual(heroAfterSecond.is_hero, 1, 'Hero stays a real hero of this hand — their own file DID import it at some point');
+
+  const playerAAfterSecond = db.prepare("SELECT is_hero, hole_cards FROM hand_players WHERE hand_id = '100' AND player_name = 'PlayerA'").get();
+  assert.strictEqual(playerAAfterSecond.hole_cards, 'Qc Qd', 'PlayerA\'s own hidden hand is now known, filled in by their own file');
+  assert.strictEqual(playerAAfterSecond.is_hero, 1, 'PlayerA is ALSO a real hero of this hand now — both people\'s own files have been imported');
+
+  // Only one hands row and exactly two hand_players rows — a merge, not a
+  // second copy of the hand. (queryHands' own unfiltered/default view now
+  // legitimately shows this hand twice — once per is_hero=1 player, since
+  // "which hero's perspective" is genuinely ambiguous once two real people
+  // have both imported it — so that's checked separately below via an
+  // explicit perspectivePlayer, not asserted to be 1 here.)
+  const handsRowCount = db.prepare("SELECT COUNT(*) AS c FROM hands WHERE hand_id = '100'").get().c;
+  assert.strictEqual(handsRowCount, 1, 'exactly one hands row — never duplicated');
+  const playerRowCount = db.prepare("SELECT COUNT(*) AS c FROM hand_players WHERE hand_id = '100'").get().c;
+  assert.strictEqual(playerRowCount, 2, 'exactly one hand_players row per seated player — never duplicated');
+
+  assert.strictEqual(queryHands(db, { perspectivePlayer: 'Hero' }).total, 1, 'Hero\'s own perspective sees this hand exactly once');
+  assert.strictEqual(queryHands(db, { perspectivePlayer: 'PlayerA' }).total, 1, 'PlayerA\'s own perspective sees this hand exactly once too');
+});
+
+test('importFileIntoStore: the merge is order-independent — PlayerA\'s file first, then Hero\'s, ends up in the identical state', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A_FROM_PLAYERA_PERSPECTIVE, 'playerA-file.txt', { replaceHeroName: false }, splitHands);
+  importFileIntoStore(db, HAND_A_FROM_HERO_PERSPECTIVE, 'hero-file.txt', { replaceHeroName: true }, splitHands);
+
+  const hero = db.prepare("SELECT is_hero, hole_cards FROM hand_players WHERE hand_id = '100' AND player_name = 'Hero'").get();
+  const playerA = db.prepare("SELECT is_hero, hole_cards FROM hand_players WHERE hand_id = '100' AND player_name = 'PlayerA'").get();
+  assert.strictEqual(hero.hole_cards, 'Ah Kh');
+  assert.strictEqual(hero.is_hero, 1);
+  assert.strictEqual(playerA.hole_cards, 'Qc Qd');
+  assert.strictEqual(playerA.is_hero, 1);
+});
+
+test('importFileIntoStore: net/VPIP/PFR for a shared hand agree regardless of which of the two people\'s files computed them — both derive from the same public action log', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A_FROM_HERO_PERSPECTIVE, 'hero-file.txt', { replaceHeroName: true }, splitHands);
+  importFileIntoStore(db, HAND_A_FROM_PLAYERA_PERSPECTIVE, 'playerA-file.txt', { replaceHeroName: false }, splitHands);
+
+  const hero = db.prepare("SELECT net, vpip, pfr FROM hand_players WHERE hand_id = '100' AND player_name = 'Hero'").get();
+  const playerA = db.prepare("SELECT net, vpip, pfr FROM hand_players WHERE hand_id = '100' AND player_name = 'PlayerA'").get();
+  // Hero (BB) won the $1 pot uncontested on the flop, net +$0.50 (their own
+  // $0.50 BB back plus PlayerA's $0.50). PlayerA's SB completed to match the
+  // $0.50 BB preflop (a $0.25 call on top of their $0.25 SB post), then
+  // folded the flop bet without adding more — net -$0.50, the full amount
+  // they put in, zero of it coming back.
+  assert.strictEqual(hero.net, 0.5);
+  assert.strictEqual(playerA.net, -0.5);
+  assert.strictEqual(hero.vpip, 0, 'Hero never voluntarily put money in preflop — checked as BB');
+  assert.strictEqual(playerA.vpip, 1, 'PlayerA voluntarily called preflop');
+});
+
+// ── VanillaPoker: same underlying network as Weplay, different site name in
+// the header — see the matching comment in src/converter.js. Confirms the
+// whole import pipeline (splitHands -> buildHandRecords -> the hands/
+// hand_players tables) recognizes it exactly like a Weplay file, with no
+// separate handling needed. ─────────────────────────────────────────────
+const HAND_VANILLAPOKER = `VanillaPoker Hand #700:  Hold'em No Limit ($0.25/$0.50) - 2026/08/14 10:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerA ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerA: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kh]
+PlayerA: calls $0.25
+Hero: checks
+*** FLOP *** [2c 7d 9s]
+Hero: bets $1
+PlayerA: folds
+Uncalled bet ($1) returned to Hero
+*** SHOW DOWN ***
+Hero collected $1 from pot
+*** SUMMARY ***
+Total pot $1 | Rake $0
+Board [2c 7d 9s]
+Seat 1: PlayerA (small blind) folded on the Flop
+Seat 2: Hero (big blind) collected ($1)`;
+
+test('importFileIntoStore: a VanillaPoker-prefixed hand is recognized and saved into the same hands/hand_players tables as a Weplay hand', () => {
+  const { db } = tmpDb();
+  const result = importFileIntoStore(db, HAND_VANILLAPOKER, 'vanillapoker-file.txt', { replaceHeroName: true }, splitHands);
+  assert.strictEqual(result.added, 1);
+  assert.strictEqual(result.skipped, 0);
+
+  const hand = db.prepare('SELECT * FROM hands WHERE hand_id = ?').get('700');
+  assert.ok(hand, 'the VanillaPoker hand should have landed in the hands table');
+  assert.strictEqual(hand.pot_size, 1);
+
+  const hero = db.prepare("SELECT * FROM hand_players WHERE hand_id = '700' AND player_name = 'Hero'").get();
+  assert.ok(hero, 'Hero should have a row in hand_players for this hand');
+  assert.strictEqual(hero.is_hero, 1);
+  assert.strictEqual(hero.hole_cards, 'Ah Kh');
+  assert.strictEqual(hero.won, 1);
+});
+
+// ── Starred (local bookmark) ─────────────────────────────────────────────
+// New hands default unstarred, setHandStarred flips it, and — the actual
+// point of it being excluded from UPSERT_HAND_SQL entirely — re-importing
+// the exact same hand (the real Live Sync re-sync scenario, since a table's
+// hand history file keeps getting appended to and re-scanned) must never
+// reset an existing star back off.
+
+test('queryHands: a freshly imported hand defaults to unstarred', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+  const { hands } = queryHands(db, {});
+  const hand = hands.find((h) => h.handId === '100');
+  assert.strictEqual(hand.starred, false);
+});
+
+test('setHandStarred: flips the flag, reflected immediately in queryHands', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  setHandStarred(db, '100', true);
+  let hand = queryHands(db, {}).hands.find((h) => h.handId === '100');
+  assert.strictEqual(hand.starred, true);
+
+  setHandStarred(db, '100', false);
+  hand = queryHands(db, {}).hands.find((h) => h.handId === '100');
+  assert.strictEqual(hand.starred, false, 'un-starring should work just as well as starring');
+});
+
+test('setHandStarred: a star survives re-importing the same hand (the real Live Sync re-sync scenario)', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+  setHandStarred(db, '100', true);
+
+  // Simulates Live Sync re-scanning the same still-growing table file and
+  // re-importing a hand it already has — importFileIntoStore's own UPSERT
+  // is idempotent for everything else, and starred must be no exception.
+  importFileIntoStore(db, HAND_A, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const hand = queryHands(db, {}).hands.find((h) => h.handId === '100');
+  assert.strictEqual(hand.starred, true, 're-importing the same hand must not reset an existing star');
+});
+
+// ── getLiveHudStats ──────────────────────────────────────────────────────
+// A bomb-pot hand where PlayerB (not hero) posts an ante and bets the flop
+// uncontested — reused deliberately in HAND_BOMB_POT's own style (see that
+// fixture above) so the only thing under test here is scoping, not a new
+// parsing scenario. PlayerB has no preflop decision at all (bomb pots skip
+// straight to the flop), so this hand must NOT count toward PlayerB's
+// nonBomb-scoped denominators (VPIP/PFR/RFI), but its flop bet must still
+// land in Agg%'s numerator/denominator — see getLiveHudStats' own comment
+// in src/handStore.js for why those two stats are scoped differently.
+const HAND_BOMB_POT_PB = `Weplay Hand #304:  Hold'em No Limit ($0.25/$0.50) - 2026/07/08 14:00:00 UTC
+Table 'Bomb Pot'(111) 6-max Seat #1 is the button
+Seat 1: PlayerB ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerB: posts the ante $1.5
+Hero: posts the ante $1.5
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+*** FLOP *** [Ah Kh Qh]
+PlayerB: bets $1
+Hero: folds
+Uncalled bet ($1) returned to PlayerB
+*** SHOW DOWN ***
+PlayerB collected $3 from pot
+*** SUMMARY ***
+Total pot $3 | Rake $0
+Seat 1: PlayerB collected ($3)
+Seat 2: Hero folded on the Flop`;
+
+test('getLiveHudStats: VPIP/PFR/RFI stay scoped to non-bomb hands, while Agg% pulls in bomb-pot postflop action too', () => {
+  const { db } = tmpDb();
+  // HAND_B (PlayerB opens preflop, uncontested — a genuine RFI) and HAND_C
+  // (PlayerB folds their SB at an equally unopened pot — an RFI opportunity
+  // declined) are the two real, already-defined non-bomb hands PlayerB is
+  // seated in above; HAND_BOMB_POT_PB adds a third, bomb-pot hand.
+  importFileIntoStore(db, `${HAND_B}\n\n${HAND_C}\n\n${HAND_BOMB_POT_PB}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const stats = getLiveHudStats(db, ['PlayerB']).PlayerB;
+  assert.ok(stats, 'PlayerB has rows in the database');
+  assert.strictEqual(stats.hands, 3, 'sample size counts every hand PlayerB was seated in, bomb pot included');
+  assert.strictEqual(stats.vpip, 50, 'VPIP denominator is the 2 non-bomb hands only — PlayerB voluntarily played 1 of them (HAND_B)');
+  assert.strictEqual(stats.pfr, 50, 'same 2-hand non-bomb denominator — PlayerB raised in 1 of them');
+  assert.strictEqual(stats.rfi, 50, 'RFI: opened HAND_B, declined the same opportunity in HAND_C, bomb pot has no preflop at all so cannot contribute either way');
+  assert.strictEqual(stats.aggPct, 100, 'Agg% stays on ALL hands — PlayerB\'s only postflop action anywhere is the bomb-pot flop bet, a 1-for-1 aggressive frequency');
+});
+
+// A 3-max hand where PlayerB opens from the button (a genuine RFI from late
+// position — a steal attempt too), then folds when Hero re-raises. Mirrors
+// stats.test.js's own HAND_HERO_OPENS_AND_3BETS_FOLDS shape exactly, just
+// with PlayerB in the role under test instead of Hero — see that fixture
+// for why this specific action sequence (open, 3-bet, fold) is what
+// produces both hadThreeBetOpportunityAfterOpening and foldedToThreeBet.
+const HAND_PB_OPENS_3BET_FOLD = `Weplay Hand #305:  Hold'em No Limit ($0.25/$0.50) - 2026/07/09 10:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerB ($50 in chips)
+Seat 2: Hero ($50 in chips)
+Seat 3: PlayerC ($50 in chips)
+PlayerC: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kh]
+PlayerB: raises $1.5 to $1.5
+PlayerC: folds
+Hero: raises $4.5 to $4.5
+PlayerB: folds
+Uncalled bet ($1) returned to Hero
+*** SHOW DOWN ***
+Hero collected $6.75 from pot
+*** SUMMARY ***
+Total pot $6.75 | Rake $0
+Seat 1: PlayerB folded before Flop
+Seat 2: Hero (big blind) collected ($6.75)
+Seat 3: PlayerC (small blind) folded before Flop`;
+
+test('getLiveHudStats: Fold to 3-Bet% and ATS% — the two newly-migrated opportunity columns — compute correctly from a real open-and-get-3-bet hand', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_PB_OPENS_3BET_FOLD, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const stats = getLiveHudStats(db, ['PlayerB']).PlayerB;
+  assert.strictEqual(stats.hands, 1);
+  assert.strictEqual(stats.rfi, 100, 'PlayerB opened an unopened pot from the button');
+  assert.strictEqual(stats.attemptSteal, 100, 'the button is a steal position — the same open also counts as an attempted steal');
+  assert.strictEqual(stats.foldToThreeBet, 100, "PlayerB's own open got re-raised, and they folded to it");
+  assert.strictEqual(stats.threeBet, null, 'PlayerB was never facing exactly one prior raise themselves, so 3-Bet% has no denominator here');
+});
+
+test('backfillDeepStats: also backfills the live-HUD opportunity columns for a database imported before they existed', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_PB_OPENS_3BET_FOLD, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  // Simulate "imported before this migration" — exactly what ALTER TABLE
+  // ADD COLUMN leaves behind on a database that already had this row.
+  db.exec(`UPDATE hand_players SET
+    rfi_opportunity = NULL, had_three_bet_opportunity_after_opening = NULL, steal_opportunity = NULL
+    WHERE player_name = 'PlayerB'`);
+
+  const before = getLiveHudStats(db, ['PlayerB']).PlayerB;
+  assert.strictEqual(before.rfi, null, 'a NULL opportunity denominator produces no rate, not a false zero');
+  assert.strictEqual(before.foldToThreeBet, null);
+  assert.strictEqual(before.attemptSteal, null);
+
+  const backfilled = backfillDeepStats(db, analyzeHand);
+  assert.ok(backfilled > 0);
+
+  const after = getLiveHudStats(db, ['PlayerB']).PlayerB;
+  assert.strictEqual(after.rfi, 100, 'matches the fresh-import result from the test above');
+  assert.strictEqual(after.foldToThreeBet, 100);
+  assert.strictEqual(after.attemptSteal, 100);
+
+  assert.strictEqual(backfillDeepStats(db, analyzeHand), 0, 'idempotent, same as every other backfillDeepStats gap');
 });
 
 console.log(`\n${passed} test(s) passed.`);

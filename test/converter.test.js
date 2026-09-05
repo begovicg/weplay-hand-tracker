@@ -6,7 +6,7 @@
 // silently again.
 
 const assert = require('assert');
-const { convertHand, convertFile } = require('../src/converter');
+const { convertHand, convertFile, splitHands } = require('../src/converter');
 
 let passed = 0;
 function test(name, fn) {
@@ -94,6 +94,32 @@ Seat 3: petit_blaireau (small blind) folded on the Flop
 Seat 4: marko_kon (big blind) folded before Flop 
 Seat 5: Toni01 folded before Flop 
 Seat 6: Perakralj folded before Flop`;
+
+// ── Fixture: VanillaPoker — same network, different site name in the header
+// (confirmed byte-for-byte identical format otherwise against real
+// VanillaPoker sample files) ────────────────────────────────────────────
+const HAND_VANILLAPOKER = `VanillaPoker Hand #88209716:  Hold'em No Limit ($0.50/$1) - 2026/08/14 16:47:43 UTC
+Table 'Belgrade #2'(11797804) 6-max Seat #1 is the button
+Seat 1: Usisivac ($107.24 in chips)
+Seat 2: Kure55 ($80.29 in chips)
+Seat 3: ryzenn ($108.39 in chips)
+Usisivac: posts the ante $0.18
+Kure55: posts the ante $0.18
+ryzenn: posts the ante $0.18
+Kure55: posts small blind $0.50
+ryzenn: posts big blind $1
+*** HOLE CARDS ***
+Dealt to Usisivac [4s 9d]
+Usisivac: folds
+Kure55: folds
+Uncalled bet ($0.50) returned to ryzenn
+*** SHOW DOWN ***
+ryzenn collected $1.36 from pot
+*** SUMMARY ***
+Total pot $1.36 | Rake $0
+Seat 1: Usisivac folded before Flop
+Seat 2: Kure55 (small blind) folded before Flop
+Seat 3: ryzenn (big blind) collected ($1.36)`;
 
 // ── Fixture: side pot (short stack all-in covered by two others) ──────────
 const HAND_SIDE_POT = `Weplay Hand #90000001:  Hold'em No Limit ($1/$2) - 2026/07/05 19:00:00 UTC
@@ -575,6 +601,28 @@ test('hand with no resolution anywhere (disconnect at showdown, no winner ever r
   const { skipped, skipReason } = convertHand(HAND_NO_RESOLUTION, { replaceHeroName: true });
   assert.ok(skipped, 'a hand with no collected-from-pot line anywhere should be skipped');
   assert.ok(/no.*collected from pot/i.test(skipReason), `expected a clear reason about the missing resolution, got: ${skipReason}`);
+});
+
+test('VanillaPoker: header is recognized and converts just like a Weplay hand (same network, different site name)', () => {
+  const { text, skipped, handId } = convertHand(HAND_VANILLAPOKER, { replaceHeroName: false });
+  assert.ok(!skipped, 'a VanillaPoker header should not be treated as unparseable');
+  assert.ok(/^CoinPoker Hand #88209716:/.test(text), 'hand ID should be pulled from the VanillaPoker header');
+  assertPotMath(text);
+});
+
+test('VanillaPoker: splitHands splits a file mixing Weplay and VanillaPoker blocks into separate hands', () => {
+  const mixed = `${HAND_SINGLE_WINNER}\n\n\n${HAND_VANILLAPOKER}\n`;
+  const blocks = splitHands(mixed);
+  assert.strictEqual(blocks.length, 2, 'both a Weplay block and a VanillaPoker block should be split out');
+  assert.ok(blocks[0].startsWith('Weplay Hand #85897948'));
+  assert.ok(blocks[1].startsWith('VanillaPoker Hand #88209716'));
+});
+
+test('VanillaPoker: convertFile processes a VanillaPoker-only file end to end, hand ID detected correctly', () => {
+  const { handCount, skippedHands, text } = convertFile(HAND_VANILLAPOKER, { replaceHeroName: false });
+  assert.strictEqual(handCount, 1);
+  assert.strictEqual(skippedHands.length, 0);
+  assertPotMath(text);
 });
 
 console.log(`\n${passed} test(s) passed.`);

@@ -1,22 +1,24 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, screen } = require('electron');
 const { DatabaseSync } = require('node:sqlite');
+const { Worker } = require('node:worker_threads');
 const path = require('path');
 const fs = require('fs');
 const { convertFile } = require('./src/converter');
 const { createZip } = require('./src/zipWriter');
 const { extractTextFiles } = require('./src/zipReader');
-const { openDatabase } = require('./src/db');
+const { openDatabase, getSetting, setSetting } = require('./src/db');
 const {
   importFileIntoStore, queryHands, getDistinctValues, getHandById, getConvertedText,
   queryRawHandsForStats, getAllPlayerNames,
-  getTotalHandCount, backfillDeepStats,
+  getTotalHandCount, getQuickPlayerStats, setHandStarred,
 } = require('./src/handStore');
 const { migrateJsonStoreIfPresent } = require('./src/migrateJsonStore');
 const { buildHandReplay } = require('./src/handReplay');
 const { analyzeHand, aggregateStats } = require('./src/stats');
 const { splitHands } = require('./src/converter');
+const { startHudOverlay, stopHudOverlay, isHudOverlayRunning } = require('./src/hudOverlay');
 
 // Auto-reload during development
 if (process.env.NODE_ENV !== 'production') {
@@ -27,6 +29,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 let mainWindow;
 const handWindows = new Map(); // "handId::perspectivePlayer" -> BrowserWindow, so re-clicking the same hand (from the same perspective) focuses instead of duplicating
+let liveSyncWorker = null; // Worker running src/liveSyncWorker.js, or null when not running
 
 // ── Hand database ────────────────────────────────────────────────────────
 // SQLite (via Node's built-in node:sqlite — no external dependency needed;
@@ -38,6 +41,47 @@ const handWindows = new Map(); // "handId::perspectivePlayer" -> BrowserWindow, 
 const dbPath = path.join(app.getPath('userData'), 'hands.db');
 const oldJsonStorePath = path.join(app.getPath('userData'), 'hands.json');
 let db = null;
+let backfillWorker = null;
+
+// The one-time backfills (backfillDeepStats, backfillEVAdjustments — see
+// src/handStore.js) used to run synchronously right here, inline. That was
+// fine while they were cheap, but once EV adjustment was generalized to
+// cover every all-in in the database (not just hero's own), a real
+// multi-thousand-hand database can have hundreds of qualifying hands, each
+// needing its own equity computation (up to ~1 second for a Monte Carlo
+// preflop/flop all-in) — tens of minutes of synchronous main-thread work in
+// the worst case. Electron's main thread also owns the native window
+// message pump on Windows, so that much unbroken synchronous work made the
+// app appear as "Not Responding" at the OS level, not just slow — a real
+// regression reported after that change. Running it on a worker thread
+// instead (src/backfillWorker.js, its own separate SQLite connection to the
+// same file) means the main thread — and the window it owns — is never
+// blocked by it, however long it takes; see src/db.js's busy_timeout
+// comment for why two connections writing to the same file is safe.
+function startBackfillWorker() {
+  backfillWorker = new Worker(path.join(__dirname, 'src', 'backfillWorker.js'), { workerData: { dbPath } });
+  // Don't let a still-running background backfill keep the app process
+  // alive after every window is closed and app.quit() is called — this is
+  // maintenance work, not something worth delaying shutdown for.
+  backfillWorker.unref();
+  backfillWorker.on('message', (msg) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backfill-status', msg);
+    if (msg.phase === 'done') {
+      if (msg.deepStatsFixed > 0) console.log(`Backfilled deep stats for ${msg.deepStatsFixed} player-hand row(s) from before this was computed for every seated player.`);
+      if (msg.evFixed > 0) console.log(`Backfilled EV adjustment for ${msg.evFixed} hand(s) imported before it covered both hero-involving and non-hero all-ins.`);
+    } else if (msg.phase === 'error') {
+      console.error('Background database backfill failed:', msg.error);
+    }
+  });
+  backfillWorker.on('error', (err) => console.error('Backfill worker crashed:', err));
+}
+
+function stopBackfillWorker() {
+  if (backfillWorker) {
+    backfillWorker.terminate();
+    backfillWorker = null;
+  }
+}
 
 function getDb() {
   if (db === null) {
@@ -46,28 +90,82 @@ function getDb() {
     if (migration.migrated) {
       console.log(`Migrated ${migration.totalRecords} hands from the old JSON store (${migration.added} added, ${migration.updated} updated, ${migration.skipped} skipped).`);
     }
-    // One-time backfill covering two real gaps: hands imported before
-    // saw_flop existed (hero rows, net already populated but saw_flop
-    // still NULL), and — since deep stats now compute for every seated
-    // player, not just hero — every non-hero row from before that change,
-    // which never had net/VPIP/PFR/etc computed at all. Idempotent: once
-    // every row has a real value, this finds nothing left to do and is a
-    // fast no-op on every subsequent launch. Verified against this
-    // project's real 22,888-hand batch (140,253 total player-rows across
-    // every seated player) at under 10 seconds worst-case.
-    const backfilled = backfillDeepStats(db, analyzeHand);
-    if (backfilled > 0) {
-      console.log(`Backfilled deep stats for ${backfilled} player-hand row(s) from before this was computed for every seated player.`);
-    }
+    startBackfillWorker();
   }
   return db;
 }
 
+function stopLiveSync() {
+  if (liveSyncWorker) {
+    liveSyncWorker.terminate();
+    liveSyncWorker = null;
+  }
+}
+
 function closeDb() {
+  stopBackfillWorker();
+  stopLiveSync(); // its own separate DB connection (see liveSyncWorker.js) would otherwise outlive this one closing/swapping underneath it
+  stopHudOverlay(); // holds no DB connection of its own, but reads via getDb() on every tick — nothing left to read from once this closes
   if (db) {
     try { db.close(); } catch (err) { /* already closed or unusable, nothing to do */ }
     db = null;
   }
+}
+
+// Starts (or restarts) Live Sync against `folderPath` on its own worker
+// thread — see src/liveSyncWorker.js for why: the initial catch-up scan
+// alone measured ~56s against a real 62-file/29,000-hand folder, which
+// would freeze this window for that entire time if run on the main
+// thread. Persists both the folder and the enabled flag so it resumes
+// automatically next launch — see resumeLiveSyncIfEnabled() below, called
+// once at startup.
+function beginLiveSync(folderPath) {
+  stopLiveSync();
+  const database = getDb();
+  setSetting(database, 'liveSyncFolder', folderPath);
+  setSetting(database, 'liveSyncEnabled', '1');
+  liveSyncWorker = new Worker(path.join(__dirname, 'src', 'liveSyncWorker.js'), {
+    workerData: { dbPath, folderPath, options: { replaceHeroName: true } },
+  });
+  liveSyncWorker.on('message', (msg) => {
+    if (msg.phase === 'update' && mainWindow && !mainWindow.isDestroyed()) {
+      const { phase, ...totals } = msg;
+      mainWindow.webContents.send('live-sync-status', { running: true, folderPath, ...totals });
+    }
+  });
+  // Before this fix, a worker crash only ever got logged — liveSyncWorker
+  // stayed set, so get-live-sync-state kept reporting "running: true" and
+  // the UI's badge stayed stuck on "On" forever with nothing actually
+  // watching the folder anymore. Clearing it and pushing a status update
+  // makes a crash visible (badge flips to Off, an error line appears)
+  // instead of silently doing nothing for the rest of the session.
+  liveSyncWorker.on('error', (err) => {
+    console.error('Live Sync worker crashed:', err);
+    liveSyncWorker = null;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('live-sync-status', {
+        running: false, folderPath, added: 0, updated: 0, skipped: 0, filesProcessed: 0,
+        errors: [`Live Sync stopped unexpectedly: ${err.message}`],
+      });
+    }
+  });
+}
+
+function resumeLiveSyncIfEnabled() {
+  const database = getDb();
+  const folderPath = getSetting(database, 'liveSyncFolder');
+  const enabled = getSetting(database, 'liveSyncEnabled') === '1';
+  if (enabled && folderPath && fs.existsSync(folderPath)) beginLiveSync(folderPath);
+}
+
+// Same persisted-toggle shape as Live Sync above — resumes automatically on
+// the next launch if it was left on. Unlike Live Sync, this doesn't need
+// its own worker thread (see src/hudOverlay.js's own comment for why: it
+// only ever reads, on a plain interval, never a long synchronous import
+// batch that could block the window).
+function resumeHudOverlayIfEnabled() {
+  const database = getDb();
+  if (getSetting(database, 'hudOverlayEnabled') === '1') startHudOverlay(getDb);
 }
 
 // Confirms a file is actually a Weplay Hand Tracker database (has the two
@@ -91,7 +189,7 @@ function looksLikeValidHandDatabase(filePath) {
 
 // Backs up the entire database — everything, no filters — as a real
 // standalone .db file someone could hand to another machine or just keep
-// safe. Different from Export from Database (Import Hands tab), which is a
+// safe. Different from Export from Database (Import/Export Hands tab), which is a
 // filtered subset in plain text for sharing specific hands, not a full
 // disaster-recovery copy. WAL mode means recent writes can sit in a
 // separate -wal sidecar file rather than the main .db file itself — a
@@ -157,7 +255,10 @@ function createWindow() {
     height: 760,
     minWidth: 720,
     minHeight: 560,
-    backgroundColor: '#0e0e0f',
+    // Matches renderer/style.css's --bg exactly — any mismatch here shows up
+    // as a brief flash the instant the stylesheet finishes applying over
+    // this native pre-paint color.
+    backgroundColor: '#0b0b0c',
     title: 'Weplay Hand Tracker',
     icon: path.join(__dirname, 'build', 'icon.png'),
     // Not shown until maximized and ready — avoids a visible flash of a
@@ -179,6 +280,8 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
+  resumeLiveSyncIfEnabled();
+  resumeHudOverlayIfEnabled();
 });
 
 app.on('window-all-closed', () => {
@@ -187,6 +290,17 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
+// Live Sync and the backfill worker are Node worker_threads — genuine
+// threads inside this same process, so they die on their own the instant
+// the process exits, nothing to clean up. The HUD overlay's window-finder
+// server (src/windowFinder.js) is different: a real separate OS process
+// (powershell.exe), which Windows does NOT kill automatically just because
+// the process that spawned it exits. Without this, quitting the app while
+// the HUD was running left that process orphaned in the background
+// forever — stopHudOverlay() (which also tears down the overlay
+// BrowserWindows and the refresh timer) is a no-op if the HUD was never
+// started, so this is safe to call unconditionally on every quit.
+app.on('before-quit', () => stopHudOverlay());
 
 // ── IPC: app version (so the UI can show it, and so mismatched-build issues
 // like "I downloaded a new zip but it looks like the old version" are
@@ -279,31 +393,28 @@ ipcMain.handle('get-persistent-stats', async (event, filters) => {
   let excludedCount = 0;
   for (const row of rows) {
     const result = analyzeHand(row.rawText, row.playerName);
-    if (result) allHands.push(result); else excludedCount++;
+    if (result) {
+      // Carry the DB-stored all-in EV adjustment (see src/evAnalysis.js /
+      // src/handStore.js) onto the freshly re-parsed hand object, so
+      // aggregateStats can fold it into both the EV winrate and the
+      // per-hand EV cumulative line without a second query or a re-run of
+      // the Monte Carlo equity sampling.
+      result.evAdjustmentBB = row.evAdjustmentBB;
+      allHands.push(result);
+    } else excludedCount++;
   }
-  const stats = aggregateStats(allHands);
-
-  // EV winrate: reads each hand's EV adjustment straight from the database
+  // EV winrate (evBb100) and handTimeline's EV cumulative line both live in
+  // aggregateStats now, computed from the same allHands set bb100 uses —
+  // each hand's EV adjustment was read straight from the database above
   // (computed once at import time — see src/handStore.js and
-  // src/evAnalysis.js), rather than recomputing it here. Recomputing would
-  // mean re-running Monte Carlo equity sampling for every qualifying hand on
+  // src/evAnalysis.js), rather than recomputed here. Recomputing would mean
+  // re-running Monte Carlo equity sampling for every qualifying hand on
   // every single Stats tab visit, which measured at over 30 seconds for a
   // real 22,889-hand database — fine as a one-time import cost, not
   // acceptable to repeat every time someone just wants to check their stats.
-  let evBbSum = 0, evHandCount = 0, evAdjustedHandCount = 0;
-  for (const row of rows) {
-    if (row.net == null || !row.stakesLabel) continue;
-    const bbMatch = /\/\$([0-9.]+)$/.exec(row.stakesLabel);
-    const bb = bbMatch ? parseFloat(bbMatch[1]) : null;
-    if (!bb) continue;
-    const adjustment = row.evAdjustmentBB || 0;
-    if (row.evAdjustmentBB != null) evAdjustedHandCount++;
-    evBbSum += row.net / bb + adjustment;
-    evHandCount++;
-  }
-  const evBb100 = evHandCount > 0 ? (evBbSum / evHandCount) * 100 : null;
+  const stats = aggregateStats(allHands);
 
-  return { stats, excludedCount, totalStoredHands: rows.length, evBb100, evAdjustedHandCount };
+  return { stats, excludedCount, totalStoredHands: rows.length, evBb100: stats.evBb100, evAdjustedHandCount: stats.evAdjustedHandCount };
 });
 
 // ── IPC: save results (single file, or zip if multiple) ────────────────
@@ -347,6 +458,104 @@ ipcMain.handle('import-to-hand-store', async (event, files, options) => {
   return totals;
 });
 
+// ── IPC: Live Sync ───────────────────────────────────────────────────────
+// Watches the folder Weplay itself writes hand histories to and imports new
+// hands as they land — see src/liveSync.js for the actual watching/scanning
+// logic; this is just the UI-facing control surface (pick a folder,
+// start/stop, and report current state on load so the Import/Export tab can
+// restore its own UI without a separate "are we running" round trip).
+
+ipcMain.handle('pick-live-sync-folder', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Select the folder Weplay writes hand histories to',
+    properties: ['openDirectory'],
+  });
+  if (result.canceled || !result.filePaths[0]) return { folderPath: null };
+  return { folderPath: result.filePaths[0] };
+});
+
+ipcMain.handle('start-live-sync', async (event, folderPath) => {
+  if (!folderPath || !fs.existsSync(folderPath)) {
+    return { running: false, error: 'That folder doesn\'t exist (or isn\'t accessible).' };
+  }
+  beginLiveSync(folderPath);
+  return { running: true, folderPath };
+});
+
+ipcMain.handle('stop-live-sync', async () => {
+  stopLiveSync();
+  const database = getDb();
+  setSetting(database, 'liveSyncEnabled', '0');
+  return { running: false };
+});
+
+ipcMain.handle('get-live-sync-state', async () => {
+  const database = getDb();
+  return {
+    running: liveSyncWorker !== null,
+    folderPath: getSetting(database, 'liveSyncFolder'),
+  };
+});
+
+// ── IPC: the on-table HUD overlay (src/hudOverlay.js) ────────────────────
+// Reuses whatever folder Live Sync is already pointed at (src/hudOverlay.js
+// reads the 'liveSyncFolder' setting itself) rather than asking for a
+// second folder pick — the HUD needs the exact same live hand-history
+// files Live Sync already watches, so there's nothing else to configure
+// here beyond on/off.
+
+ipcMain.handle('start-hud-overlay', async () => {
+  const database = getDb();
+  if (!getSetting(database, 'liveSyncFolder')) {
+    return { running: false, error: 'Turn on Live Sync first — the HUD reads the same live hand-history files.' };
+  }
+  setSetting(database, 'hudOverlayEnabled', '1');
+  startHudOverlay(getDb);
+  return { running: true };
+});
+
+ipcMain.handle('stop-hud-overlay', async () => {
+  const database = getDb();
+  setSetting(database, 'hudOverlayEnabled', '0');
+  stopHudOverlay();
+  return { running: false };
+});
+
+ipcMain.handle('get-hud-overlay-state', async () => ({ running: isHudOverlayRunning() }));
+
+// The Refresh Now button's actual "go check the folder right now" request
+// — distinct from a plain UI re-fetch (query-hands etc. against whatever's
+// already in the database), this asks the running Live Sync worker to
+// scan immediately rather than wait for the next fs.watch event or its 1s
+// debounce, and awaits its reply before resolving, so the renderer's own
+// refresh-the-UI step afterward is guaranteed to see anything this scan
+// just imported. A generous timeout guards against a worker that's wedged
+// or already dead without an 'error' event having fired yet — the
+// renderer still falls back to a plain UI refresh either way.
+ipcMain.handle('rescan-live-sync-now', async () => {
+  if (!liveSyncWorker) return { triggered: false };
+  const worker = liveSyncWorker;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      worker.off('message', onMessage);
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const onMessage = (msg) => {
+      if (msg && msg.phase === 'rescanComplete') {
+        const { phase, ...totals } = msg;
+        finish({ triggered: true, ...totals });
+      }
+    };
+    const timer = setTimeout(() => finish({ triggered: false, timedOut: true }), 30000);
+    worker.on('message', onMessage);
+    worker.postMessage({ type: 'rescan' });
+  });
+});
+
 // Exports whatever the shared filter bar currently matches, straight from
 // the database — not the currently-loaded files, which is a separate,
 // unrelated set. queryRawHandsForStats already returns every matching
@@ -358,13 +567,17 @@ ipcMain.handle('import-to-hand-store', async (event, files, options) => {
 // formatted hand viewer) — one combined .txt file either way, multiple
 // hands separated by a blank line, matching the same multi-hand file shape
 // this app already knows how to read back in.
-ipcMain.handle('export-filtered-hands', async (event, filters, format) => {
+ipcMain.handle('export-filtered-hands', async (event, filters, format, options) => {
+  const opts = options || {};
   const database = getDb();
   const rows = queryRawHandsForStats(database, filters || {});
   if (rows.length === 0) return { saved: false, count: 0 };
 
+  // replaceHeroName only ever mattered for the converted branch — raw
+  // export is each hand's original stored text verbatim, and "Hero" is a
+  // CoinPoker-output convention that format never had to begin with.
   const parts = format === 'converted'
-    ? rows.map((r) => getConvertedText(r.rawText, { replaceHeroName: true })).filter(Boolean)
+    ? rows.map((r) => getConvertedText(r.rawText, { replaceHeroName: opts.replaceHeroName !== false })).filter(Boolean)
     : rows.map((r) => r.rawText);
   const combinedText = parts.join('\n\n');
 
@@ -382,6 +595,13 @@ ipcMain.handle('export-filtered-hands', async (event, filters, format) => {
 
 ipcMain.handle('query-hands', async (event, filters) => {
   return queryHands(getDb(), filters);
+});
+
+// Purely local bookmarking — see the `starred` column's own comment in
+// src/db.js for why this never touches export or the import/UPSERT path.
+ipcMain.handle('set-hand-starred', async (event, handId, starred) => {
+  setHandStarred(getDb(), handId, starred);
+  return { ok: true };
 });
 
 ipcMain.handle('get-filter-options', async (event, filters) => {
@@ -411,6 +631,10 @@ ipcMain.handle('get-hand-detail', async (event, handId, perspectivePlayer, optio
   };
 });
 
+ipcMain.handle('get-quick-player-stats', async (event, playerNames) => {
+  return getQuickPlayerStats(getDb(), playerNames);
+});
+
 // ── Hand detail sub-window ───────────────────────────────────────────────
 // A separate, independently resizable window per hand — matching how
 // PokerTracker/HM3/Hand2Note actually show a hand history, not a modal
@@ -431,13 +655,21 @@ ipcMain.handle('open-hand-window', async (event, handId, perspectivePlayer) => {
   }
 
   const win = new BrowserWindow({
-    width: 700,
+    width: 560,
     height: 620,
-    minWidth: 480,
+    minWidth: 460,
     minHeight: 420,
-    backgroundColor: '#0e0e0f',
+    // Matches renderer/style.css's --bg (this window loads style.css too,
+    // layered under hand-detail.css) — see createWindow()'s comment above.
+    backgroundColor: '#0b0b0c',
     title: `Hand #${handId}`,
     icon: path.join(__dirname, 'build', 'icon.png'),
+    // Not shown until hand-detail.js reports how tall its own content
+    // actually is — see the 'hand-window-fit-content' handler below, which
+    // resizes to that height (capped to the screen) before revealing.
+    // Avoids opening at this fixed 620 default and showing a scrollbar for
+    // hands that would otherwise fit on screen with room to spare.
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'handDetailPreload.js'),
       contextIsolation: true,
@@ -448,6 +680,33 @@ ipcMain.handle('open-hand-window', async (event, handId, perspectivePlayer) => {
   handWindows.set(key, win);
   win.on('closed', () => handWindows.delete(key));
   win.loadFile(path.join(__dirname, 'renderer', 'hand-detail.html'), { query: { handId, perspectivePlayer: perspectivePlayer || '' } });
+});
+
+// Called once hand-detail.js has laid out its content and knows its own
+// natural (unclipped) height — resizes the window to fit that height
+// without a scrollbar, capped to how much vertical room the screen it's on
+// actually has (leaving space for the OS title bar/taskbar, neither of
+// which counts toward content size). A long hand — many streets, a
+// multi-way showdown, run-it-twice — still ends up scrolling past that cap,
+// same as before; a short hand no longer scrolls just because the window
+// opened at an arbitrary fixed height. Also does the window's first
+// show() — see open-hand-window's own comment for why it starts hidden.
+ipcMain.handle('hand-window-fit-content', (event, desiredContentHeight) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return;
+
+  const [width, currentHeight] = win.getContentSize();
+  const display = screen.getDisplayMatching(win.getBounds());
+  const maxHeight = Math.max(420, display.workAreaSize.height - 90);
+  const targetHeight = Math.min(Math.max(Math.ceil(desiredContentHeight) || currentHeight, 420), maxHeight);
+
+  if (targetHeight !== currentHeight) win.setContentSize(width, targetHeight);
+  // Re-centers on whatever display it ends up on — setContentSize alone
+  // keeps the window's original top-left corner fixed and only grows
+  // downward, which could push a taller window's bottom edge off-screen
+  // depending on where Electron initially placed it.
+  win.center();
+  if (!win.isVisible()) win.show();
 });
 
 // Saves the hand-detail window's content as a PNG image — built on

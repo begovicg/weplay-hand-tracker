@@ -22,6 +22,10 @@
      for the Advanced Graph's showdown-results line, so the app doesn't
      introduce an uncoordinated second blue. */
   --info: #3b82f6;
+  /* The Advanced Graph's EV-adjusted (all-in equity) line — kept distinct
+     from --warn's orange so the two aren't mistaken for each other when
+     both appear near the stat cards. */
+  --ev-line: #facc15;
   --radius: 12px;
   --radius-sm: 8px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
@@ -120,7 +124,59 @@ body {
 main {
   max-width: 1500px;
   margin: 0 auto;
-  padding: 30px 24px 110px; /* room for the fixed footer so it never overlaps content */
+  /* Room for the fixed footer so it never overlaps content — kept in sync
+     with the footer's actual (content-dependent) height via the
+     --footer-space custom property, set in renderer.js's syncFooterSpace().
+     110px is just the pre-JS fallback for the very first paint. */
+  padding: 14px 24px var(--footer-space, 110px);
+}
+
+/* Live Sync — watches Weplay's own hand-history folder and imports as you
+   play (src/liveSync.js). Its own bordered card, same visual language as
+   .results-summary, so it reads as the tab's headline capability rather
+   than blending into the manual drag-and-drop flow beneath it. */
+.live-sync-section {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 20px;
+}
+
+.live-sync-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.live-sync-badge.live-sync-off { color: var(--text-faint); background: var(--bg-panel-2); border: 1px solid var(--border); }
+.live-sync-badge.live-sync-on { color: var(--ok); background: var(--ok-bg); border: 1px solid rgba(74, 222, 128, 0.25); }
+
+.live-sync-controls {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.live-sync-folder-field { flex: 1; min-width: 260px; }
+
+.live-sync-folder-field input {
+  width: 100%;
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.live-sync-status-text {
+  margin: 12px 0 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
 }
 
 .dropzone {
@@ -219,7 +275,7 @@ main {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: 32px 0 10px;
+  margin: 16px 0 10px;
 }
 
 .section-head h2, #resultsSection h2 {
@@ -508,20 +564,132 @@ main {
   margin-bottom: 20px;
 }
 
-/* Advanced Graph tab — the same underlying timeline data as the small
-   chart in the Hands tab, just given a whole tab's worth of space instead
-   of sharing a row with stat cards. See renderer.js's buildAdvancedTimelineChartSvg. */
+/* Advanced Stats tab — the HUD table (below) is the tab's actual content
+   now; this chart is supporting context underneath it, so it gets less
+   vertical space than when it had the whole tab to itself. Still the same
+   underlying timeline data as the small chart in the Player Overview tab.
+   See renderer.js's buildAdvancedTimelineChartSvg. */
 .advanced-graph-section {
   background: var(--bg-panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
-  padding: 18px 20px;
+  padding: 32px 36px;
+  /* Same width as .filters-bar above, so this card's edges line up with
+     it instead of stretching to main's full content width. */
+  max-width: calc(1500px - 48px);
+  margin: 0 auto 16px;
 }
 
 .advanced-graph-chart {
   width: 100%;
-  height: 65vh;
-  min-height: 440px;
+  height: 56vh;
+  min-height: 420px;
+}
+
+/* These boxes' own generous padding (above) IS the deliberate margin — a
+   .section-head inside them would otherwise stack its own 16px top margin
+   on top of that, pushing the actual table/chart down further than
+   intended. */
+.hud-section .section-head,
+.advanced-graph-section .section-head {
+  margin-top: 0;
+}
+
+/* Advanced Stats tab — HUD table: a Dojson-HUD-style grouped breakdown of
+   every stat stats.js computes. See renderer.js's renderHudTable. 6 section
+   boxes (.hud-group) laid out across a fixed 4-column grid instead of the
+   previous auto-fit, so the count stays a deliberate 4 across instead of
+   however many 230px tiles happen to fit — two of the 4 columns stack a
+   pair of related .hud-group boxes inside a .hud-column wrapper, using the
+   exact same gap as between columns, so a stacked column's internal
+   spacing matches the grid's own rhythm. Collapses to 2 under 900px (the
+   same breakpoint .stats-overview-grid already uses) so 4 real columns
+   don't get squeezed illegibly narrow on a smaller window. */
+.hud-section {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 32px 36px;
+  /* Same width as .filters-bar above, so this card's edges line up with
+     it instead of stretching to main's full content width. */
+  max-width: calc(1500px - 48px);
+  margin: 0 auto 20px;
+}
+
+.hud-table {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .hud-table { grid-template-columns: repeat(2, 1fr); }
+}
+
+.hud-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hud-group {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+}
+
+.hud-group-title {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.hud-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hud-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.hud-row-label {
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Proactive/aggressive actions read green, "folded to X" actions read
+   orange — a quick visual read of doing something vs. giving up, matching
+   the reference HUD this table is modeled on. Stats that are neither (raw
+   showdown/aggression ratios) stay the default text color. */
+.hud-row-label.hud-pos { color: var(--ok); }
+.hud-row-label.hud-neg { color: var(--warn); }
+
+.hud-row-value {
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hud-row-count {
+  margin-left: 5px;
+  font-size: 9.5px;
+  font-weight: 500;
+  color: var(--text-faint);
+  vertical-align: super;
 }
 
 .graph-legend {
@@ -529,6 +697,10 @@ main {
   gap: 20px;
   margin-bottom: 10px;
   flex-wrap: wrap;
+  /* Aligns the legend's left edge with the chart's vertical axis line
+     rather than the panel's own edge — padL/width (100/1400) from
+     buildAdvancedTimelineChartSvg in renderer.js. */
+  padding-left: 7.14%;
 }
 
 .graph-legend-item {
@@ -550,6 +722,7 @@ main {
 .swatch-total { background: var(--ok); }
 .swatch-showdown { background: var(--info); }
 .swatch-nonshowdown { background: var(--danger); }
+.swatch-ev { background: var(--ev-line); }
 
 .stats-overview-head {
   display: flex;
@@ -580,10 +753,14 @@ main {
   .stats-overview-grid { grid-template-columns: 1fr; }
 }
 
+/* A real 3x3 grid, not auto-fill — exactly 9 cards (see renderStats),
+   arranged the same row-major order as the Dojson HUD reference this is
+   deliberately modeled on: Hands/Winnings/VPIP, Home/Winrate/PFR,
+   WWSF/Expected V/3Bet. */
 .stats-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
   align-content: start;
 }
 
@@ -591,28 +768,36 @@ main {
   background: var(--bg-panel-2);
   border: 1px solid var(--border-soft);
   border-radius: 9px;
-  padding: 9px 10px;
+  padding: 14px 18px;
   transition: border-color 0.2s var(--ease), transform 0.15s var(--ease);
 }
 
 .stat-card:hover { border-color: var(--border); transform: translateY(-1px); }
 
+/* Label left, value right on one line — the Dojson HUD's own layout,
+   instead of the previous stacked label-above-value tile. */
+.stat-card-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .stat-card-label {
-  font-size: 9.5px;
-  color: var(--text-faint);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 4px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .stat-card-value {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 800;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .stat-card-value.positive { color: var(--ok); }
@@ -621,7 +806,7 @@ main {
 .stat-card-sub {
   font-size: 9px;
   color: var(--text-faint);
-  margin-top: 3px;
+  margin-top: 5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -654,13 +839,17 @@ main {
 /* Hands table lives inside the same stats-overview panel now, as its own
    labeled sub-section rather than a separate card. */
 #handsSection {
-  margin-top: 18px;
-  padding-top: 16px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--border-soft);
 }
 
+/* Overrides ALL of .section-head's margin here, not just bottom — the
+   border-top/margin-top on #handsSection itself already separates this
+   from the stat cards above, so the general rule's own 16px top margin
+   would just be redundant extra space stacked on top of that. */
 #handsSection .section-head {
-  margin-bottom: 10px;
+  margin: 0 0 10px;
 }
 
 .hands-pagination {
@@ -735,8 +924,12 @@ main {
   border-top: 1px solid var(--border-soft);
   padding: 8px 24px;
   z-index: 5;
-  max-height: 90px;
-  overflow-y: auto;
+  /* No max-height/overflow here on purpose — the caveat text's length
+     varies (grows as more stats get their own explanatory sentence), so a
+     fixed cap just reintroduces an internal scrollbar the moment it's
+     exceeded. Grows to fit its content instead; main's own bottom padding
+     is kept in sync with however tall that ends up being (see
+     syncFooterSpace() in renderer.js) so it never overlaps page content. */
 }
 
 .stats-caveat {
@@ -786,6 +979,34 @@ main {
 
 .loading-overlay.hidden {
   display: none;
+}
+
+/* Boot overlay — a solid (not translucent) full-bleed cover, distinct from
+   the semi-transparent .loading-overlay above: that one veils real content
+   that's already on screen during a later operation (import, export...);
+   this one stands in for content that doesn't exist yet at all, so it needs
+   to be fully opaque, not a blur over an empty page. */
+.boot-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  z-index: 100;
+}
+
+.boot-overlay.hidden {
+  display: none;
+}
+
+.boot-overlay-logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  font-size: 30px;
 }
 
 .spinner {
@@ -856,15 +1077,23 @@ main {
 /* Hands & Stats (merged) — filters bar sits at the top, driving both the
    stats overview and the hands table below it. */
 
+/* Grid, not flex — a fixed column per field (rather than flex-wrap letting
+   the browser pack items and wrap when they run out of room) means the row
+   never wraps to a second line, and the fr tracks below absorb 100% of
+   whatever width the window gives this bar instead of leaving dead space
+   past the last button. Date fields and the trailing icon/buttons get
+   fixed/auto tracks since stretching them wide would just pad empty space
+   inside a small control. */
 .filters-bar {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns:
+    2fr 130px 130px 1fr 1fr 0.9fr 1.6fr 1fr 0.9fr 0.8fr auto auto auto;
   align-items: end;
-  gap: 12px;
+  gap: 14px;
   background: var(--bg-panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
-  padding: 14px 16px;
+  padding: 12px 14px;
   /* Matches main's actual content width (max-width minus main's own 24px
      side padding), not main's outer box — so this card's edges line up
      with the stats-overview panel's edges below it, not with main itself
@@ -877,9 +1106,88 @@ main {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
 }
 
+/* Player perspective selector — a custom-filtering combobox, not a native
+   <select> or <datalist>: neither of those lets us guarantee "starts with"
+   matching (a native <select>'s own type-ahead jumps/cycles rather than
+   filtering the visible list, and <datalist>'s browser-owned matching isn't
+   controllable at all) — see renderer.js's renderPlayerSearchOptions for
+   the actual prefix-match logic. #filterPlayer itself stays in the DOM as
+   a hidden value-holder so every existing filter/currentFilters()/reset
+   call site that already reads its .value keeps working unchanged; only
+   #filterPlayerSearch is ever visible or focusable. */
+.player-search-wrap {
+  position: relative;
+  width: 100%;
+  display: block;
+}
+
 #filterPlayer {
+  display: none;
+}
+
+#filterPlayerSearch {
   font-weight: 700;
   border-color: var(--orange-dim) !important;
+  width: 100%;
+  box-sizing: border-box;
+  /* Room for .player-search-arrow so typed text never runs under it. */
+  padding-right: 26px !important;
+}
+
+/* A plain ▾ glyph, matching this app's own convention for every other
+   dropdown-style affordance (Filters ▾/▴, sort ▲/▼) — restores the visual
+   "this is a dropdown" cue a native <select> gave for free.
+   pointer-events: none so clicks pass straight through to the input
+   underneath instead of landing on the glyph. */
+.player-search-arrow {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  color: var(--text-faint);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.player-search-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.player-search-option {
+  padding: 7px 10px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.player-search-option:hover {
+  background: var(--orange-glow);
+}
+
+.player-search-count {
+  color: var(--text-faint);
+  font-weight: 400;
+  margin-left: 5px;
+}
+
+.player-search-empty {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 .filter-field {
@@ -893,6 +1201,7 @@ main {
   color: var(--text-faint);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  white-space: nowrap;
 }
 
 .filter-field select,
@@ -903,9 +1212,10 @@ main {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 7px 10px;
+  padding: 7px 8px;
   font-size: 12.5px;
   font-family: inherit;
+  text-overflow: ellipsis;
 }
 
 .filter-field select:focus,
@@ -916,7 +1226,63 @@ main {
 
 .filter-pot-input { width: 80px; }
 
-.filter-search input { width: 160px; }
+/* Marks off a filter tacked onto a group it doesn't thematically belong to
+   (currently just Vs Player, parked under C-Bet — see the HTML comment
+   there) — a plain top border rather than a full <hr>, so it reads as "the
+   rest of this card is a separate thing" without adding its own visible
+   line weight competing with the group's own border. */
+.advanced-filters-sep {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 2px;
+}
+
+/* Advanced Filters panel — collapsed by default, toggled by
+   #advancedFiltersToggle (see renderer.js). Grouped like the Advanced Stats
+   HUD table groups its own rows (.hud-group/.hud-row) for the same reason:
+   a lot of same-shaped controls read better sorted into labeled clusters
+   than as one long flat list. Each group is just .filter-field controls
+   (identical look to the main filters-bar above) in a compact grid instead
+   of the main bar's single-row flex-wrap, since there are far more of them
+   here. */
+.advanced-filters-panel {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  max-width: calc(1500px - 48px);
+  margin: -8px auto 16px;
+}
+
+@media (max-width: 1100px) {
+  .advanced-filters-panel { grid-template-columns: repeat(2, 1fr); }
+}
+
+.advanced-filters-group {
+  background: var(--bg-panel-2);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.advanced-filters-group-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+.advanced-filters-group .filter-field select,
+.advanced-filters-group .filter-field input {
+  width: 100%;
+}
 
 /* Hands table — plain HTML table, not a third-party grid library. Full
    control over every pixel, fully testable structurally (unlike a library
@@ -1030,6 +1396,28 @@ body.col-resizing .col-resize-handle {
 .hands-data-table .wtsd-no { color: var(--text-faint); }
 .hands-data-table .bomb-icon { font-size: 13px; }
 
+/* Star toggle — hollow and faint when unstarred, filled and orange once
+   marked. font-size bumped up from the table's own 12.5px base since a
+   unicode star glyph reads small/thin at that size otherwise. The whole
+   cell (.star-cell), not just the glyph, is the actual click target — see
+   renderHandsRows — so the cursor and hover color both apply cell-wide,
+   matching what's actually clickable rather than just the visible glyph. */
+.hands-data-table td.star-cell {
+  cursor: pointer;
+}
+
+.hands-data-table .hand-star {
+  display: inline-block;
+  font-size: 23px;
+  line-height: 1;
+  color: var(--text-faint);
+  transition: color 0.12s var(--ease), transform 0.12s var(--ease);
+}
+
+.hands-data-table td.star-cell:hover .hand-star { color: var(--orange-dim); }
+.hands-data-table .hand-star.starred { color: var(--orange); }
+.hands-data-table td.star-cell:hover .hand-star.starred { color: var(--orange-bright); }
+
 .hands-table-empty {
   text-align: center !important;
   color: var(--text-faint);
@@ -1046,12 +1434,12 @@ body.col-resizing .col-resize-handle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 17px;
+  min-width: 11.5px;
   height: 20px;
-  padding: 0 2px;
+  padding: 0;
   border-radius: 4px;
   font-weight: 800;
-  font-size: 13px;
+  font-size: 17px;
   line-height: 1;
   color: #fff;
   margin-right: 3px;

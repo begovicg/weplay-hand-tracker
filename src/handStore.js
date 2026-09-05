@@ -13,7 +13,10 @@ const { buildHandReplay } = require('./handReplay');
 // hero) rather than re-deriving it, and stats.js for every player's deep
 // stats (net, VPIP, PFR, hand category, saw flop) — not hero-only anymore,
 // see the comment inside buildHandRecords for how that changed. EV
-// adjustment (src/evAnalysis.js) remains hero-only.
+// adjustment (src/evAnalysis.js) is hero-agnostic too — computed for
+// whichever two seated players a qualifying all-in was actually between,
+// each getting their own exact number — see the evAdjustmentBB comment
+// inside buildHandRecords.
 
 function buildHandRecords(rawBlock, sourceFile, options) {
   const heroOverride = (options && options.heroName) || null;
@@ -76,10 +79,36 @@ function buildHandRecords(rawBlock, sourceFile, options) {
     // 8-max table, extrapolating to about 15 extra seconds across this
     // project's entire 22,888-hand batch — not the "generalize the whole
     // engine" undertaking this module's own header comment once assumed
-    // it would be. EV adjustment stays hero-only for now — a separate,
-    // more involved generalization (src/evAnalysis.js), deliberately not
-    // bundled into this change.
+    // it would be.
     const playerStats = isHero ? statsResult : analyzeHand(rawBlock, p.name);
+    // EV adjustment: computeHandEVAdjustment is hero-agnostic (see its
+    // comment in evAnalysis.js) — evResult.players lists whichever two
+    // seated players the all-in was actually between, hero or not, each
+    // with their own exact adjustment. Every other seated player (someone
+    // who folded before the all-in ever happened, or wasn't part of it)
+    // correctly stays null, since the runout variance never applied to
+    // them.
+    const evMatch = evResult && evResult.players.find((pl) => pl.name === p.name);
+    const evAdjustmentBB = evMatch ? evMatch.adjustmentBB : null;
+    // Advanced-filters action flags — every one of these already exists on
+    // playerStats (analyzeHand's return object, src/stats.js:550-589),
+    // already computed for every seated player above, not just hero. This
+    // is pure persistence of values already sitting in memory, not new
+    // analysis — same `playerStats ? (x ? 1 : 0) : null` shape already used
+    // for vpip/pfr/sawFlop, just applied to more fields. cbetMade/
+    // foldedToCBet are flat {FLOP,TURN,RIVER: boolean} objects;
+    // checkRaiseByStreet[street] is {opp, cr} — cr is the achieved count.
+    const b = (v) => (playerStats ? (v ? 1 : 0) : null);
+    // HUD quick-stats (3-Bet%, Agg%): streetAgg is analyzeHand's raw
+    // per-street {agg, calls, folds, checks} counts — summed across
+    // flop/turn/river here so getQuickPlayerStats can build Agg% with a
+    // plain SQL SUM instead of re-parsing raw text per player. See
+    // src/db.js's hand_players columns for the exact formula this feeds.
+    const streetAgg = playerStats && playerStats.streetAgg;
+    const postflopAggCount = streetAgg ? (streetAgg.FLOP.agg + streetAgg.TURN.agg + streetAgg.RIVER.agg) : null;
+    const postflopAggDenom = streetAgg
+      ? ['FLOP', 'TURN', 'RIVER'].reduce((s, k) => s + streetAgg[k].agg + streetAgg[k].calls + streetAgg[k].folds + streetAgg[k].checks, 0)
+      : null;
     return {
       handId: replay.handId,
       playerName: p.name,
@@ -89,15 +118,73 @@ function buildHandRecords(rawBlock, sourceFile, options) {
       startingStack: p.stackBB,
       holeCards: isHero ? replay.heroCards : (shown ? shown.cards : null),
       net: playerStats ? playerStats.net : null,
-      vpip: playerStats ? (playerStats.vpip ? 1 : 0) : null,
-      pfr: playerStats ? (playerStats.pfr ? 1 : 0) : null,
-      sawFlop: playerStats ? (playerStats.sawFlop ? 1 : 0) : null,
+      vpip: b(playerStats && playerStats.vpip),
+      pfr: b(playerStats && playerStats.pfr),
+      sawFlop: b(playerStats && playerStats.sawFlop),
       handCategory: playerStats ? playerStats.handCategory : null,
-      // Cheap and correct for ANY player, not just hero — both read directly
-      // off the hand's own showdown/winners data.
-      wentToShowdown: showdownByName.has(p.name) ? 1 : 0,
+      // Genuine "reached a real 2+-way showdown" (src/stats.js's
+      // reachedShowdown), computed per-player exactly like wonAtShowdown/
+      // wonWhenSawFlop below — NOT showdownByName.has(p.name), which was a
+      // real bug: that only asked "does a raw `shows` line with valid cards
+      // exist for this player," true only when someone actually reveals
+      // their cards. A hand can genuinely reach a 2+-way showdown and still
+      // have the loser muck without showing (very common — no reason to
+      // show a loser), so that old definition silently undercounted real
+      // showdowns, which is exactly why filtering "Showdown: No" could
+      // still show a nonzero WTSD% in the stats above it — mucked losses
+      // slipped through as "not shown" even though they genuinely reached
+      // showdown. `won` below stays correct as-is (reads winners, a
+      // separate and already-accurate signal).
+      wentToShowdown: b(playerStats && playerStats.reachedShowdown),
       won: wonNames.has(p.name) ? 1 : 0,
-      evAdjustmentBB: isHero && evResult ? evResult.adjustmentBB : null,
+      evAdjustmentBB,
+      rfi: b(playerStats && playerStats.rfi),
+      coldCall: b(playerStats && playerStats.coldCall),
+      limped: b(playerStats && playerStats.limped),
+      threeBet: b(playerStats && playerStats.threeBet),
+      foldedToThreeBet: b(playerStats && playerStats.foldedToThreeBet),
+      fourBet: b(playerStats && playerStats.fourBet),
+      foldedToFourBet: b(playerStats && playerStats.foldedToFourBet),
+      squeeze: b(playerStats && playerStats.squeeze),
+      attemptSteal: b(playerStats && playerStats.attemptSteal),
+      foldedToSteal: b(playerStats && playerStats.foldedToSteal),
+      cbetFlop: b(playerStats && playerStats.cbetMade && playerStats.cbetMade.FLOP),
+      cbetTurn: b(playerStats && playerStats.cbetMade && playerStats.cbetMade.TURN),
+      cbetRiver: b(playerStats && playerStats.cbetMade && playerStats.cbetMade.RIVER),
+      foldedToCbetFlop: b(playerStats && playerStats.foldedToCBet && playerStats.foldedToCBet.FLOP),
+      foldedToCbetTurn: b(playerStats && playerStats.foldedToCBet && playerStats.foldedToCBet.TURN),
+      foldedToCbetRiver: b(playerStats && playerStats.foldedToCBet && playerStats.foldedToCBet.RIVER),
+      checkRaiseFlop: b(playerStats && playerStats.checkRaiseByStreet && playerStats.checkRaiseByStreet.FLOP.cr > 0),
+      checkRaiseTurn: b(playerStats && playerStats.checkRaiseByStreet && playerStats.checkRaiseByStreet.TURN.cr > 0),
+      checkRaiseRiver: b(playerStats && playerStats.checkRaiseByStreet && playerStats.checkRaiseByStreet.RIVER.cr > 0),
+      wonAtShowdown: b(playerStats && playerStats.wonAtShowdown),
+      wonWhenSawFlop: b(playerStats && playerStats.wonWhenSawFlop),
+      facedThreeBetOpportunity: b(playerStats && playerStats.facedThreeBetOpportunity),
+      postflopAggCount,
+      postflopAggDenom,
+      // Live-HUD opportunity denominators — see src/db.js's hand_players
+      // comment. Every field read here already exists on analyzeHand's
+      // return object (src/stats.js); this is pure persistence, not new
+      // analysis, the same shape as the advanced-filters flags above.
+      rfiOpportunity: b(playerStats && playerStats.rfiOpportunity),
+      coldCallOpportunity: b(playerStats && playerStats.coldCallOpportunity),
+      hadThreeBetOpportunityAfterOpening: b(playerStats && playerStats.hadThreeBetOpportunityAfterOpening),
+      facedFourBetOpportunity: b(playerStats && playerStats.facedFourBetOpportunity),
+      squeezeOpportunity: b(playerStats && playerStats.squeezeOpportunity),
+      stealOpportunity: b(playerStats && playerStats.stealOpportunity),
+      stealDefenseOpportunity: b(playerStats && playerStats.stealDefenseOpportunity),
+      cbetOpportunityFlop: b(playerStats && playerStats.cbetOpportunity && playerStats.cbetOpportunity.FLOP),
+      cbetOpportunityTurn: b(playerStats && playerStats.cbetOpportunity && playerStats.cbetOpportunity.TURN),
+      cbetOpportunityRiver: b(playerStats && playerStats.cbetOpportunity && playerStats.cbetOpportunity.RIVER),
+      facedCbetOpportunityFlop: b(playerStats && playerStats.facedCBetOpportunity && playerStats.facedCBetOpportunity.FLOP),
+      facedCbetOpportunityTurn: b(playerStats && playerStats.facedCBetOpportunity && playerStats.facedCBetOpportunity.TURN),
+      facedCbetOpportunityRiver: b(playerStats && playerStats.facedCBetOpportunity && playerStats.facedCBetOpportunity.RIVER),
+      // Not booleanized like the flags above — checkRaiseByStreet[street].opp
+      // is a real per-hand count (see its own comment in stats.js), summed
+      // directly by getLiveHudStats rather than filtered/counted.
+      checkRaiseOpportunityFlop: playerStats && playerStats.checkRaiseByStreet ? playerStats.checkRaiseByStreet.FLOP.opp : null,
+      checkRaiseOpportunityTurn: playerStats && playerStats.checkRaiseByStreet ? playerStats.checkRaiseByStreet.TURN.opp : null,
+      checkRaiseOpportunityRiver: playerStats && playerStats.checkRaiseByStreet ? playerStats.checkRaiseByStreet.RIVER.opp : null,
     };
   });
 
@@ -116,39 +203,172 @@ function getConvertedText(rawText, options) {
 
 // ── Import ───────────────────────────────────────────────────────────────
 
+// A genuine UPDATE on conflict, deliberately NOT "INSERT OR REPLACE" — that
+// statement's name is misleading: SQLite's REPLACE conflict resolution
+// deletes the existing row and inserts a fresh one, which is indistinguishable
+// from an UPDATE for this table's own columns, but hand_players.hand_id
+// REFERENCES hands(hand_id) ON DELETE CASCADE (see src/db.js) — so that
+// delete silently cascaded and wiped every hand_players row for the hand
+// BEFORE UPSERT_PLAYER_SQL's own merge logic ever ran, discarding the exact
+// data (an earlier importer's hole cards, is_hero) that merge exists to
+// protect. An ON CONFLICT...DO UPDATE never deletes the row at all, so no
+// cascade fires.
 const UPSERT_HAND_SQL = `
-  INSERT OR REPLACE INTO hands
+  INSERT INTO hands
     (hand_id, source_file, imported_at, date, time, sb_stake, bb_stake, stakes_label,
      max_seats, table_type, table_category, is_run_twice, board, pot_size, rake,
      skipped, skip_reason, raw_text)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(hand_id) DO UPDATE SET
+    source_file = excluded.source_file,
+    imported_at = excluded.imported_at,
+    date = excluded.date,
+    time = excluded.time,
+    sb_stake = excluded.sb_stake,
+    bb_stake = excluded.bb_stake,
+    stakes_label = excluded.stakes_label,
+    max_seats = excluded.max_seats,
+    table_type = excluded.table_type,
+    table_category = excluded.table_category,
+    is_run_twice = excluded.is_run_twice,
+    board = excluded.board,
+    pot_size = excluded.pot_size,
+    rake = excluded.rake,
+    skipped = excluded.skipped,
+    skip_reason = excluded.skip_reason,
+    raw_text = excluded.raw_text
 `;
 
-const DELETE_PLAYERS_SQL = 'DELETE FROM hand_players WHERE hand_id = ?';
-
-const INSERT_PLAYER_SQL = `
+// One player at a time, upserted rather than delete-then-reinsert — this is
+// what makes it safe to import the SAME hand_id from two different people's
+// own exports of a hand they shared a table for (the actual scenario a
+// shared/pooled multi-person database needs). Each real Weplay hand only
+// ever reveals hole cards from two angles: whoever's own client the file
+// came from (their hidden cards, even if mucked) and anyone who showed at a
+// genuine showdown (public — identical in every witness's export). A naive
+// delete-then-reinsert on re-import loses the FIRST angle: importing
+// Friend B's file after Friend A's already-stored file would null out A's
+// hole cards (B's export never saw them) and flip is_hero from A to B, even
+// though nothing about the real hand changed. ON CONFLICT here merges
+// instead of replacing:
+//   - is_hero: MAX (OR) — once ANY import reveals this hand from a given
+//     player's own client, they stay flagged as a real hero of this hand
+//     forever, even if a later import is from someone else's file.
+//   - hole_cards: COALESCE(new, old) — never let a "this file doesn't know"
+//     import null out an already-known answer; still updates the instant
+//     any import DOES know it (their own file, or a showdown reveal).
+//   - net/vpip/pfr/saw_flop/hand_category/went_to_showdown/won/seat/
+//     position/starting_stack: COALESCE(new, old) too, but these are all
+//     derived from PUBLIC action/board state that's identical regardless of
+//     which witness's file it came from, so which side "wins" is a
+//     tiebreak, not a correctness question — refreshing to the newest
+//     computation is just a nice side effect (e.g. an analyzeHand bug fix
+//     naturally reaches already-imported hands on their next re-import).
+//   - ev_adjustment_bb: COALESCE(old, new) — the ONE column deliberately
+//     preferring the EXISTING value, so a harmless re-import of an
+//     already-resolved all-in doesn't churn its stored number on every
+//     re-import via a fresh (differently-seeded) Monte Carlo draw.
+const UPSERT_PLAYER_SQL = `
   INSERT INTO hand_players
     (hand_id, player_name, is_hero, seat, position, starting_stack, hole_cards,
-     net, vpip, pfr, saw_flop, hand_category, went_to_showdown, won, ev_adjustment_bb)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     net, vpip, pfr, saw_flop, hand_category, went_to_showdown, won, ev_adjustment_bb,
+     rfi, cold_call, limped, three_bet, folded_to_three_bet, four_bet, folded_to_four_bet,
+     squeeze, attempt_steal, folded_to_steal,
+     cbet_flop, cbet_turn, cbet_river,
+     folded_to_cbet_flop, folded_to_cbet_turn, folded_to_cbet_river,
+     check_raise_flop, check_raise_turn, check_raise_river,
+     won_at_showdown, won_when_saw_flop,
+     faced_three_bet_opportunity, postflop_agg_count, postflop_agg_denom,
+     rfi_opportunity, cold_call_opportunity, had_three_bet_opportunity_after_opening,
+     faced_four_bet_opportunity, squeeze_opportunity, steal_opportunity, steal_defense_opportunity,
+     cbet_opportunity_flop, cbet_opportunity_turn, cbet_opportunity_river,
+     faced_cbet_opportunity_flop, faced_cbet_opportunity_turn, faced_cbet_opportunity_river,
+     check_raise_opportunity_flop, check_raise_opportunity_turn, check_raise_opportunity_river)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(hand_id, player_name) DO UPDATE SET
+    is_hero              = MAX(hand_players.is_hero, excluded.is_hero),
+    seat                 = COALESCE(excluded.seat, hand_players.seat),
+    position             = COALESCE(excluded.position, hand_players.position),
+    starting_stack       = COALESCE(excluded.starting_stack, hand_players.starting_stack),
+    hole_cards           = COALESCE(excluded.hole_cards, hand_players.hole_cards),
+    net                  = COALESCE(excluded.net, hand_players.net),
+    vpip                 = COALESCE(excluded.vpip, hand_players.vpip),
+    pfr                  = COALESCE(excluded.pfr, hand_players.pfr),
+    saw_flop             = COALESCE(excluded.saw_flop, hand_players.saw_flop),
+    hand_category        = COALESCE(excluded.hand_category, hand_players.hand_category),
+    went_to_showdown     = COALESCE(excluded.went_to_showdown, hand_players.went_to_showdown),
+    won                  = COALESCE(excluded.won, hand_players.won),
+    ev_adjustment_bb     = COALESCE(hand_players.ev_adjustment_bb, excluded.ev_adjustment_bb),
+    -- Advanced-filters action flags: same COALESCE(new, old) tiebreak as
+    -- net/vpip/etc above, not the ev_adjustment_bb special case — these are
+    -- all deterministic from public action data, so which side "wins" is
+    -- never a correctness question, just a refresh-to-newest convenience.
+    rfi                  = COALESCE(excluded.rfi, hand_players.rfi),
+    cold_call            = COALESCE(excluded.cold_call, hand_players.cold_call),
+    limped               = COALESCE(excluded.limped, hand_players.limped),
+    three_bet            = COALESCE(excluded.three_bet, hand_players.three_bet),
+    folded_to_three_bet  = COALESCE(excluded.folded_to_three_bet, hand_players.folded_to_three_bet),
+    four_bet             = COALESCE(excluded.four_bet, hand_players.four_bet),
+    folded_to_four_bet   = COALESCE(excluded.folded_to_four_bet, hand_players.folded_to_four_bet),
+    squeeze              = COALESCE(excluded.squeeze, hand_players.squeeze),
+    attempt_steal        = COALESCE(excluded.attempt_steal, hand_players.attempt_steal),
+    folded_to_steal      = COALESCE(excluded.folded_to_steal, hand_players.folded_to_steal),
+    cbet_flop            = COALESCE(excluded.cbet_flop, hand_players.cbet_flop),
+    cbet_turn            = COALESCE(excluded.cbet_turn, hand_players.cbet_turn),
+    cbet_river           = COALESCE(excluded.cbet_river, hand_players.cbet_river),
+    folded_to_cbet_flop  = COALESCE(excluded.folded_to_cbet_flop, hand_players.folded_to_cbet_flop),
+    folded_to_cbet_turn  = COALESCE(excluded.folded_to_cbet_turn, hand_players.folded_to_cbet_turn),
+    folded_to_cbet_river = COALESCE(excluded.folded_to_cbet_river, hand_players.folded_to_cbet_river),
+    check_raise_flop     = COALESCE(excluded.check_raise_flop, hand_players.check_raise_flop),
+    check_raise_turn     = COALESCE(excluded.check_raise_turn, hand_players.check_raise_turn),
+    check_raise_river    = COALESCE(excluded.check_raise_river, hand_players.check_raise_river),
+    won_at_showdown      = COALESCE(excluded.won_at_showdown, hand_players.won_at_showdown),
+    won_when_saw_flop    = COALESCE(excluded.won_when_saw_flop, hand_players.won_when_saw_flop),
+    faced_three_bet_opportunity = COALESCE(excluded.faced_three_bet_opportunity, hand_players.faced_three_bet_opportunity),
+    postflop_agg_count   = COALESCE(excluded.postflop_agg_count, hand_players.postflop_agg_count),
+    postflop_agg_denom   = COALESCE(excluded.postflop_agg_denom, hand_players.postflop_agg_denom),
+    -- Live-HUD opportunity denominators: same COALESCE(new, old) tiebreak
+    -- as every other deterministic-from-public-data column above.
+    rfi_opportunity      = COALESCE(excluded.rfi_opportunity, hand_players.rfi_opportunity),
+    cold_call_opportunity = COALESCE(excluded.cold_call_opportunity, hand_players.cold_call_opportunity),
+    had_three_bet_opportunity_after_opening = COALESCE(excluded.had_three_bet_opportunity_after_opening, hand_players.had_three_bet_opportunity_after_opening),
+    faced_four_bet_opportunity = COALESCE(excluded.faced_four_bet_opportunity, hand_players.faced_four_bet_opportunity),
+    squeeze_opportunity  = COALESCE(excluded.squeeze_opportunity, hand_players.squeeze_opportunity),
+    steal_opportunity    = COALESCE(excluded.steal_opportunity, hand_players.steal_opportunity),
+    steal_defense_opportunity = COALESCE(excluded.steal_defense_opportunity, hand_players.steal_defense_opportunity),
+    cbet_opportunity_flop = COALESCE(excluded.cbet_opportunity_flop, hand_players.cbet_opportunity_flop),
+    cbet_opportunity_turn = COALESCE(excluded.cbet_opportunity_turn, hand_players.cbet_opportunity_turn),
+    cbet_opportunity_river = COALESCE(excluded.cbet_opportunity_river, hand_players.cbet_opportunity_river),
+    faced_cbet_opportunity_flop = COALESCE(excluded.faced_cbet_opportunity_flop, hand_players.faced_cbet_opportunity_flop),
+    faced_cbet_opportunity_turn = COALESCE(excluded.faced_cbet_opportunity_turn, hand_players.faced_cbet_opportunity_turn),
+    faced_cbet_opportunity_river = COALESCE(excluded.faced_cbet_opportunity_river, hand_players.faced_cbet_opportunity_river),
+    check_raise_opportunity_flop = COALESCE(excluded.check_raise_opportunity_flop, hand_players.check_raise_opportunity_flop),
+    check_raise_opportunity_turn = COALESCE(excluded.check_raise_opportunity_turn, hand_players.check_raise_opportunity_turn),
+    check_raise_opportunity_river = COALESCE(excluded.check_raise_opportunity_river, hand_players.check_raise_opportunity_river)
 `;
 
 /**
  * Imports every hand from a raw Weplay file into the database, keyed by
- * hand ID so re-importing the same file (or an overlapping export) safely
- * updates rather than duplicates — each hand's player rows are fully
- * replaced (not merged) on re-import, so a hand's data never mixes stale
- * and fresh rows. Wrapped in one transaction per file: importing thousands
- * of hands as individually-committed statements measurably slower and adds
- * no correctness benefit here.
+ * hand ID so re-importing the same file (or an overlapping export from a
+ * different person who shared that table) safely updates rather than
+ * duplicates. Player rows are MERGED, not replaced, on re-import — see the
+ * comment on UPSERT_PLAYER_SQL above for exactly what that means and why a
+ * blind replace was a real data-loss bug for the multi-importer case.
+ * Hand-level fields (board, pot, rake, etc.) are still last-import-wins via
+ * plain INSERT OR REPLACE: unlike hole cards, those are public facts about
+ * the hand that are identical regardless of whose file revealed them, so
+ * there's nothing to merge — whichever import ran most recently is just as
+ * correct as any other. Wrapped in one transaction per file: importing
+ * thousands of hands as individually-committed statements measurably
+ * slower and adds no correctness benefit here.
  */
 function importFileIntoStore(db, rawText, sourceFile, options, splitHandsFn) {
   const blocks = splitHandsFn(rawText);
   let added = 0, updated = 0, skippedCount = 0;
 
   const upsertHand = db.prepare(UPSERT_HAND_SQL);
-  const deletePlayers = db.prepare(DELETE_PLAYERS_SQL);
-  const insertPlayer = db.prepare(INSERT_PLAYER_SQL);
+  const upsertPlayer = db.prepare(UPSERT_PLAYER_SQL);
   const checkExists = db.prepare('SELECT 1 FROM hands WHERE hand_id = ?');
 
   db.exec('BEGIN');
@@ -166,12 +386,23 @@ function importFileIntoStore(db, rawText, sourceFile, options, splitHandsFn) {
         h.stakesLabel, h.maxSeats, h.tableType, h.tableCategory, h.isRunTwice, h.board,
         h.potSize, h.rake, h.skipped, h.skipReason, h.rawText,
       );
-      deletePlayers.run(h.handId);
       for (const p of players) {
-        insertPlayer.run(
+        upsertPlayer.run(
           p.handId, p.playerName, p.isHero, p.seat, p.position, p.startingStack,
           p.holeCards, p.net, p.vpip, p.pfr, p.sawFlop, p.handCategory, p.wentToShowdown, p.won,
           p.evAdjustmentBB,
+          p.rfi, p.coldCall, p.limped, p.threeBet, p.foldedToThreeBet, p.fourBet, p.foldedToFourBet,
+          p.squeeze, p.attemptSteal, p.foldedToSteal,
+          p.cbetFlop, p.cbetTurn, p.cbetRiver,
+          p.foldedToCbetFlop, p.foldedToCbetTurn, p.foldedToCbetRiver,
+          p.checkRaiseFlop, p.checkRaiseTurn, p.checkRaiseRiver,
+          p.wonAtShowdown, p.wonWhenSawFlop,
+          p.facedThreeBetOpportunity, p.postflopAggCount, p.postflopAggDenom,
+          p.rfiOpportunity, p.coldCallOpportunity, p.hadThreeBetOpportunityAfterOpening,
+          p.facedFourBetOpportunity, p.squeezeOpportunity, p.stealOpportunity, p.stealDefenseOpportunity,
+          p.cbetOpportunityFlop, p.cbetOpportunityTurn, p.cbetOpportunityRiver,
+          p.facedCbetOpportunityFlop, p.facedCbetOpportunityTurn, p.facedCbetOpportunityRiver,
+          p.checkRaiseOpportunityFlop, p.checkRaiseOpportunityTurn, p.checkRaiseOpportunityRiver,
         );
       }
     }
@@ -219,11 +450,12 @@ function buildWhereClause(f) {
   if (f.position) { clauses.push('hp.position = ?'); params.push(f.position); }
   if (f.handCategory) { clauses.push('hp.hand_category = ?'); params.push(f.handCategory); }
   // Three-way, not a checkbox: "shown" / "not-shown" / anything else (both,
-  // no filter). hp.went_to_showdown uses the exact same "were this
-  // player's cards genuinely shown" definition as the Advanced Graph's
-  // blue/red split (src/stats.js's heroCardsShown) — both independently
-  // check for a real `shows` line with valid (non-redacted) cards, kept in
-  // sync deliberately after finding a real discrepancy between them.
+  // no filter). hp.went_to_showdown is "reached a genuine 2+-way showdown"
+  // (src/stats.js's reachedShowdown) — the standard WTSD definition, the
+  // same one the WTSD% stat itself uses, and, since it also now drives the
+  // Advanced Graph's showdown/non-showdown split (see that same
+  // reachedShowdown comment in stats.js), the same one that split uses too
+  // — both agree on what "showdown" means here, not two different signals.
   if (f.wentToShowdown === 'shown') { clauses.push('hp.went_to_showdown = 1'); }
   else if (f.wentToShowdown === 'not-shown') { clauses.push('hp.went_to_showdown = 0'); }
   // Saw Flop — three-way, same "both / yes / no" shape as the showdown
@@ -236,11 +468,77 @@ function buildWhereClause(f) {
   // different dollar range at every stake.
   if (f.potBbMin != null && f.potBbMin !== '') { clauses.push('h.pot_size >= h.bb_stake * ?'); params.push(parseFloat(f.potBbMin)); }
   if (f.potBbMax != null && f.potBbMax !== '') { clauses.push('h.pot_size <= h.bb_stake * ?'); params.push(parseFloat(f.potBbMax)); }
-  if (f.search) {
-    clauses.push('(h.hand_id LIKE ? OR h.source_file LIKE ? OR hp.hole_cards LIKE ?)');
-    const needle = `%${f.search}%`;
-    params.push(needle, needle, needle);
+  // Bomb Pots toggle — checked (the default) applies no filter at all;
+  // unchecked sends includeBombPots: false and excludes them at the query
+  // level. Every caller (stats, the hands table, the Advanced Graph, and
+  // export) shares this same WHERE clause via queryRawHandsForStats/
+  // queryHands, so excluding bomb pots here excludes them everywhere in one
+  // place — none of those call sites need their own bomb-pot handling.
+  if (f.includeBombPots === false) { clauses.push("h.table_type != 'bombpot'"); }
+
+  // ── Advanced filters ──────────────────────────────────────────────────
+  // Every field below matches what PokerTracker/Hold'em Manager/Hand2Note
+  // treat as their standard "Common Filters" / "Actions and Opportunities"
+  // set — see the ones already computed at import time by buildHandRecords
+  // (src/db.js's hand_players columns). Same 'yes'/'no'/omitted three-way
+  // shape as the existing sawFlop filter just above; a local helper here
+  // instead of repeating that if/else 23 times.
+  const threeWay = (value, column) => {
+    if (value === 'yes') clauses.push(`${column} = 1`);
+    else if (value === 'no') clauses.push(`${column} = 0`);
+  };
+  threeWay(f.vpip, 'hp.vpip');
+  threeWay(f.pfr, 'hp.pfr');
+  threeWay(f.rfi, 'hp.rfi');
+  threeWay(f.coldCall, 'hp.cold_call');
+  threeWay(f.limped, 'hp.limped');
+  threeWay(f.threeBet, 'hp.three_bet');
+  threeWay(f.foldedToThreeBet, 'hp.folded_to_three_bet');
+  threeWay(f.fourBet, 'hp.four_bet');
+  threeWay(f.foldedToFourBet, 'hp.folded_to_four_bet');
+  threeWay(f.squeeze, 'hp.squeeze');
+  threeWay(f.attemptSteal, 'hp.attempt_steal');
+  threeWay(f.foldedToSteal, 'hp.folded_to_steal');
+  threeWay(f.cbetFlop, 'hp.cbet_flop');
+  threeWay(f.cbetTurn, 'hp.cbet_turn');
+  threeWay(f.cbetRiver, 'hp.cbet_river');
+  threeWay(f.foldedToCbetFlop, 'hp.folded_to_cbet_flop');
+  threeWay(f.foldedToCbetTurn, 'hp.folded_to_cbet_turn');
+  threeWay(f.foldedToCbetRiver, 'hp.folded_to_cbet_river');
+  threeWay(f.checkRaiseFlop, 'hp.check_raise_flop');
+  threeWay(f.checkRaiseTurn, 'hp.check_raise_turn');
+  threeWay(f.checkRaiseRiver, 'hp.check_raise_river');
+  threeWay(f.wonAtShowdown, 'hp.won_at_showdown');
+  threeWay(f.wonWhenSawFlop, 'hp.won_when_saw_flop');
+  threeWay(f.runItTwice, 'h.is_run_twice');
+  // Stack depth (BB) at the start of the hand — same bb-normalized shape as
+  // the existing pot-size filter above.
+  if (f.stackBbMin != null && f.stackBbMin !== '') { clauses.push('hp.starting_stack >= ?'); params.push(parseFloat(f.stackBbMin)); }
+  if (f.stackBbMax != null && f.stackBbMax !== '') { clauses.push('hp.starting_stack <= ?'); params.push(parseFloat(f.stackBbMax)); }
+  // Stakes as a numeric bb range — alongside the exact stakesLabel picker
+  // above, not replacing it; useful for "NL50 and up" style ranges the
+  // exact-match dropdown can't express.
+  if (f.stakesBbMin != null && f.stakesBbMin !== '') { clauses.push('h.bb_stake >= ?'); params.push(parseFloat(f.stakesBbMin)); }
+  if (f.stakesBbMax != null && f.stakesBbMax !== '') { clauses.push('h.bb_stake <= ?'); params.push(parseFloat(f.stakesBbMax)); }
+
+  // "Vs Player" — narrows the current perspective's hands down to ones they
+  // played postflop against a specific named opponent: both the perspective
+  // player (hp, already scoped to them above) and the named opponent must
+  // have saw_flop = 1 in the SAME hand. Not restricted to heads-up between
+  // just the two of them — a hand where a third player also saw that flop
+  // still counts, matching the plain-English "hands where I went postflop
+  // with X" rather than a stricter "hands where it was only me and X".
+  if (f.vsPlayer) {
+    clauses.push('hp.saw_flop = 1');
+    clauses.push(`
+      EXISTS (
+        SELECT 1 FROM hand_players hp2
+        WHERE hp2.hand_id = h.hand_id AND hp2.player_name = ? AND hp2.saw_flop = 1
+      )
+    `);
+    params.push(f.vsPlayer);
   }
+
   return { where: clauses.join(' AND '), params };
 }
 
@@ -256,6 +554,7 @@ const SORT_COLUMNS = {
   position: 'hp.position',
   pot: 'h.pot_size',
   wtsd: 'hp.went_to_showdown',
+  starred: 'h.starred',
 };
 
 /**
@@ -281,7 +580,8 @@ function queryHands(db, filters) {
            h.table_type AS tableType, h.table_category AS tableCategory,
            hp.position, hp.hand_category AS handCategory, hp.hole_cards AS heroCards,
            hp.net, h.pot_size AS potSize, hp.went_to_showdown AS wentToShowdown,
-           hp.saw_flop AS sawFlop, hp.won, h.source_file AS sourceFile, h.skipped
+           hp.saw_flop AS sawFlop, hp.won, h.source_file AS sourceFile, h.skipped,
+           h.starred
     FROM hands h JOIN hand_players hp ON hp.hand_id = h.hand_id
     WHERE ${where}
     ORDER BY ${sortCol} ${sortDir}, h.hand_id ${sortDir}
@@ -296,6 +596,7 @@ function queryHands(db, filters) {
     sawFlop: r.sawFlop == null ? null : !!r.sawFlop,
     won: !!r.won,
     skipped: !!r.skipped,
+    starred: !!r.starred,
   }));
 
   return { hands, total, offset, limit };
@@ -380,24 +681,88 @@ function backfillDeepStats(db, analyzeHandFn) {
   const rows = db.prepare(`
     SELECT hp.hand_id AS handId, hp.player_name AS playerName, h.raw_text AS rawText
     FROM hand_players hp JOIN hands h ON h.hand_id = hp.hand_id
-    WHERE (hp.net IS NULL OR hp.saw_flop IS NULL) AND h.skipped = 0
+    WHERE (hp.net IS NULL OR hp.saw_flop IS NULL OR hp.rfi IS NULL OR hp.postflop_agg_count IS NULL
+           OR hp.rfi_opportunity IS NULL) AND h.skipped = 0
   `).all();
   if (rows.length === 0) return 0;
 
   const update = db.prepare(`
-    UPDATE hand_players SET net = ?, vpip = ?, pfr = ?, saw_flop = ?, hand_category = ?
+    UPDATE hand_players SET
+      net = ?, vpip = ?, pfr = ?, saw_flop = ?, hand_category = ?,
+      rfi = ?, cold_call = ?, limped = ?, three_bet = ?, folded_to_three_bet = ?,
+      four_bet = ?, folded_to_four_bet = ?, squeeze = ?, attempt_steal = ?, folded_to_steal = ?,
+      cbet_flop = ?, cbet_turn = ?, cbet_river = ?,
+      folded_to_cbet_flop = ?, folded_to_cbet_turn = ?, folded_to_cbet_river = ?,
+      check_raise_flop = ?, check_raise_turn = ?, check_raise_river = ?,
+      won_at_showdown = ?, won_when_saw_flop = ?,
+      faced_three_bet_opportunity = ?, postflop_agg_count = ?, postflop_agg_denom = ?,
+      rfi_opportunity = ?, cold_call_opportunity = ?, had_three_bet_opportunity_after_opening = ?,
+      faced_four_bet_opportunity = ?, squeeze_opportunity = ?, steal_opportunity = ?, steal_defense_opportunity = ?,
+      cbet_opportunity_flop = ?, cbet_opportunity_turn = ?, cbet_opportunity_river = ?,
+      faced_cbet_opportunity_flop = ?, faced_cbet_opportunity_turn = ?, faced_cbet_opportunity_river = ?,
+      check_raise_opportunity_flop = ?, check_raise_opportunity_turn = ?, check_raise_opportunity_river = ?
     WHERE hand_id = ? AND player_name = ?
   `);
   db.exec('BEGIN');
   try {
     for (const r of rows) {
       const analyzed = analyzeHandFn(r.rawText, r.playerName);
+      // Same "compute once, extract every field" shape as buildHandRecords'
+      // own b() helper — see that function's comment for why these are all
+      // pure persistence of an already-computed analyzeHand result, not new
+      // analysis, and why cbetMade/foldedToCBet/checkRaiseByStreet need
+      // their per-street sub-fields pulled out individually.
+      const b = (v) => (analyzed ? (v ? 1 : 0) : null);
       update.run(
         analyzed ? analyzed.net : null,
-        analyzed ? (analyzed.vpip ? 1 : 0) : null,
-        analyzed ? (analyzed.pfr ? 1 : 0) : null,
-        analyzed ? (analyzed.sawFlop ? 1 : 0) : null,
+        b(analyzed && analyzed.vpip),
+        b(analyzed && analyzed.pfr),
+        b(analyzed && analyzed.sawFlop),
         analyzed ? analyzed.handCategory : null,
+        b(analyzed && analyzed.rfi),
+        b(analyzed && analyzed.coldCall),
+        b(analyzed && analyzed.limped),
+        b(analyzed && analyzed.threeBet),
+        b(analyzed && analyzed.foldedToThreeBet),
+        b(analyzed && analyzed.fourBet),
+        b(analyzed && analyzed.foldedToFourBet),
+        b(analyzed && analyzed.squeeze),
+        b(analyzed && analyzed.attemptSteal),
+        b(analyzed && analyzed.foldedToSteal),
+        b(analyzed && analyzed.cbetMade && analyzed.cbetMade.FLOP),
+        b(analyzed && analyzed.cbetMade && analyzed.cbetMade.TURN),
+        b(analyzed && analyzed.cbetMade && analyzed.cbetMade.RIVER),
+        b(analyzed && analyzed.foldedToCBet && analyzed.foldedToCBet.FLOP),
+        b(analyzed && analyzed.foldedToCBet && analyzed.foldedToCBet.TURN),
+        b(analyzed && analyzed.foldedToCBet && analyzed.foldedToCBet.RIVER),
+        b(analyzed && analyzed.checkRaiseByStreet && analyzed.checkRaiseByStreet.FLOP.cr > 0),
+        b(analyzed && analyzed.checkRaiseByStreet && analyzed.checkRaiseByStreet.TURN.cr > 0),
+        b(analyzed && analyzed.checkRaiseByStreet && analyzed.checkRaiseByStreet.RIVER.cr > 0),
+        b(analyzed && analyzed.wonAtShowdown),
+        b(analyzed && analyzed.wonWhenSawFlop),
+        b(analyzed && analyzed.facedThreeBetOpportunity),
+        analyzed && analyzed.streetAgg
+          ? analyzed.streetAgg.FLOP.agg + analyzed.streetAgg.TURN.agg + analyzed.streetAgg.RIVER.agg
+          : null,
+        analyzed && analyzed.streetAgg
+          ? ['FLOP', 'TURN', 'RIVER'].reduce((s, k) => s + analyzed.streetAgg[k].agg + analyzed.streetAgg[k].calls + analyzed.streetAgg[k].folds + analyzed.streetAgg[k].checks, 0)
+          : null,
+        b(analyzed && analyzed.rfiOpportunity),
+        b(analyzed && analyzed.coldCallOpportunity),
+        b(analyzed && analyzed.hadThreeBetOpportunityAfterOpening),
+        b(analyzed && analyzed.facedFourBetOpportunity),
+        b(analyzed && analyzed.squeezeOpportunity),
+        b(analyzed && analyzed.stealOpportunity),
+        b(analyzed && analyzed.stealDefenseOpportunity),
+        b(analyzed && analyzed.cbetOpportunity && analyzed.cbetOpportunity.FLOP),
+        b(analyzed && analyzed.cbetOpportunity && analyzed.cbetOpportunity.TURN),
+        b(analyzed && analyzed.cbetOpportunity && analyzed.cbetOpportunity.RIVER),
+        b(analyzed && analyzed.facedCBetOpportunity && analyzed.facedCBetOpportunity.FLOP),
+        b(analyzed && analyzed.facedCBetOpportunity && analyzed.facedCBetOpportunity.TURN),
+        b(analyzed && analyzed.facedCBetOpportunity && analyzed.facedCBetOpportunity.RIVER),
+        analyzed && analyzed.checkRaiseByStreet ? analyzed.checkRaiseByStreet.FLOP.opp : null,
+        analyzed && analyzed.checkRaiseByStreet ? analyzed.checkRaiseByStreet.TURN.opp : null,
+        analyzed && analyzed.checkRaiseByStreet ? analyzed.checkRaiseByStreet.RIVER.opp : null,
         r.handId, r.playerName,
       );
     }
@@ -407,6 +772,73 @@ function backfillDeepStats(db, analyzeHandFn) {
     throw err;
   }
   return rows.length;
+}
+
+/**
+ * One-time backfill for two real gaps in EV adjustment (src/evAnalysis.js),
+ * not a missing-column gap like backfillDeepStats above — both were bugs in
+ * what got computed at import time, for hands imported before each was
+ * fixed:
+ *   1. Villain-side mirroring never existed at all (an earlier version only
+ *      ever stored hero's side of a qualifying all-in, leaving the actual
+ *      opponent's row NULL even though their number is the exact negation).
+ *   2. Even after mirroring was added, findAllInSpot was hero-anchored — an
+ *      all-in between two players where NEITHER was hero (hero folded
+ *      earlier, or wasn't dealt into that pot at all) was silently skipped
+ *      entirely, leaving BOTH seated players in that hand NULL. This was
+ *      the larger of the two: it meant a non-hero player's EV winrate barely
+ *      differed from their actual winrate, since only their all-ins against
+ *      hero specifically were ever being adjusted.
+ *
+ * A single pass covers both: for every hand that mentions an all-in in its
+ * raw text and does NOT have exactly two player rows with a real
+ * evAdjustmentBB yet — the reliable signal that this hand hasn't been fully
+ * resolved under the current logic, since a genuinely qualifying all-in
+ * always produces exactly two non-null rows: zero means gap #2 (or a hand
+ * that never actually qualifies), one means gap #1 (the old hero-only
+ * mirroring) — re-runs computeHandEVAdjustment fresh from the stored
+ * raw_text (no re-import needed) and writes both participants' numbers
+ * directly (computeHandEVAdjustment already returns the exact negation for
+ * both sides — nothing to re-derive here).
+ *
+ * Not fully idempotent the way backfillDeepStats is: a hand that mentions
+ * "and is all-in" but never actually qualifies (3+-way, run-it-twice, an
+ * all-in closing exactly on the river) will keep matching the SELECT below
+ * on every call, since it can never reach exactly two non-null rows to make
+ * the scan go quiet. That's bounded to the same cheap subset
+ * computeHandEVAdjustment already limits itself to (~12% of a real batch)
+ * and never repeats any Monte Carlo work for hands that don't qualify
+ * (findAllInSpot returns null before equity() is ever called) — a fast scan
+ * on every subsequent startup, not a slow one.
+ */
+function backfillEVAdjustments(db) {
+  const rows = db.prepare(`
+    SELECT h.hand_id AS handId, h.raw_text AS rawText
+    FROM hands h
+    WHERE h.raw_text LIKE '%and is all-in%'
+      AND (SELECT COUNT(*) FROM hand_players hp WHERE hp.hand_id = h.hand_id AND hp.ev_adjustment_bb IS NOT NULL) != 2
+  `).all();
+  if (rows.length === 0) return 0;
+
+  const update = db.prepare(`
+    UPDATE hand_players SET ev_adjustment_bb = ?
+    WHERE hand_id = ? AND player_name = ?
+  `);
+  let fixed = 0;
+  db.exec('BEGIN');
+  try {
+    for (const r of rows) {
+      const evResult = computeHandEVAdjustment(r.rawText);
+      if (!evResult) continue; // mentions "all-in" but doesn't actually qualify — see the comment above
+      for (const pl of evResult.players) update.run(pl.adjustmentBB, r.handId, pl.name);
+      fixed++;
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return fixed;
 }
 
 function getDistinctValues(db, filters) {
@@ -439,6 +871,141 @@ function queryRawHandsForStats(db, filters) {
     WHERE ${where} AND h.skipped = 0
   `).all(...params);
   return rows;
+}
+
+/**
+ * Lightweight VPIP/PFR/hand-count lookup for a batch of player names at
+ * once — powers the hand-detail replay's per-seat stat column (the
+ * DriveHUD-style "29/21 (316)" readout). Deliberately a raw SQL aggregate
+ * over hand_players rather than analyzeHand/aggregateStats: those exist to
+ * build the full HUD from raw text, which would mean re-parsing every hand
+ * a player has ever been seated in just to show three numbers next to
+ * their name. Bomb pots are excluded from both the numerator and
+ * denominator, matching the same convention aggregateStats uses for
+ * VPIP/PFR everywhere else in the app (see src/stats.js's `nonBomb`).
+ */
+function getQuickPlayerStats(db, playerNames) {
+  const names = [...new Set((playerNames || []).filter(Boolean))];
+  if (names.length === 0) return {};
+  const placeholders = names.map(() => '?').join(', ');
+  const rows = db.prepare(`
+    SELECT hp.player_name AS name, COUNT(*) AS hands,
+           SUM(hp.vpip) AS vpipCount, SUM(hp.pfr) AS pfrCount,
+           SUM(hp.three_bet) AS threeBetCount, SUM(hp.faced_three_bet_opportunity) AS threeBetOppCount,
+           SUM(hp.postflop_agg_count) AS aggCount, SUM(hp.postflop_agg_denom) AS aggDenom
+    FROM hand_players hp
+    JOIN hands h ON h.hand_id = hp.hand_id
+    WHERE hp.player_name IN (${placeholders}) AND h.skipped = 0 AND h.table_type != 'bombpot'
+    GROUP BY hp.player_name
+  `).all(...names);
+  const result = {};
+  for (const r of rows) {
+    result[r.name] = {
+      hands: r.hands,
+      vpip: r.hands ? Math.round((r.vpipCount / r.hands) * 100) : null,
+      pfr: r.hands ? Math.round((r.pfrCount / r.hands) * 100) : null,
+      threeBet: r.threeBetOppCount ? Math.round((r.threeBetCount / r.threeBetOppCount) * 100) : null,
+      aggPct: r.aggDenom ? Math.round((r.aggCount / r.aggDenom) * 100) : null,
+    };
+  }
+  return result;
+}
+
+// Every stat below that's scoped to non-bomb-pot hands only — VPIP, PFR,
+// Limp%, 3-Bet%, Fold to 3-Bet, 4-Bet%, Squeeze%, RFI%, ATS, Fold to Steal,
+// WTSD%, W$SD%, WWSF% — matches aggregateStats' own `nonBomb` convention in
+// src/stats.js (a bomb pot has no preflop betting round at all, and forces
+// every seated player to see the flop together regardless of hand
+// strength). Agg%, C-Bet%, Fold to C-Bet%, and Check-Raise% deliberately
+// stay on ALL hands including bomb pots, matching stats.js's own comment on
+// streetAggPct/cbetPct: postflop aggression carrying into a bomb-pot hand
+// is a real, well-defined question even though that hand had no preflop
+// round. Reusing getQuickPlayerStats' player_name IN (...) + skipped = 0
+// query shape, just wider — see that function's own comment for why a raw
+// SQL aggregate over hand_players is the right tool here instead of
+// aggregateStats/analyzeHand (this runs once per table refresh across up to
+// six tables' worth of opponents; re-parsing raw text per opponent on every
+// live refresh would not keep up).
+const NONBOMB = "CASE WHEN h.table_type != 'bombpot' THEN 1 ELSE 0 END";
+
+function getLiveHudStats(db, playerNames) {
+  const names = [...new Set((playerNames || []).filter(Boolean))];
+  if (names.length === 0) return {};
+  const placeholders = names.map(() => '?').join(', ');
+  const nb = (col) => `SUM(${NONBOMB} * hp.${col})`;
+  const rows = db.prepare(`
+    SELECT hp.player_name AS name,
+      COUNT(*) AS hands,
+      SUM(${NONBOMB}) AS nonBombHands,
+      ${nb('vpip')} AS vpipCount,
+      ${nb('pfr')} AS pfrCount,
+      ${nb('limped')} AS limpCount,
+      ${nb('three_bet')} AS threeBetCount,
+      ${nb('faced_three_bet_opportunity')} AS threeBetOppCount,
+      ${nb('folded_to_three_bet')} AS foldToThreeBetCount,
+      ${nb('had_three_bet_opportunity_after_opening')} AS foldToThreeBetOppCount,
+      ${nb('four_bet')} AS fourBetCount,
+      ${nb('faced_four_bet_opportunity')} AS fourBetOppCount,
+      ${nb('squeeze')} AS squeezeCount,
+      ${nb('squeeze_opportunity')} AS squeezeOppCount,
+      ${nb('rfi')} AS rfiCount,
+      ${nb('rfi_opportunity')} AS rfiOppCount,
+      ${nb('attempt_steal')} AS stealCount,
+      ${nb('steal_opportunity')} AS stealOppCount,
+      ${nb('folded_to_steal')} AS foldToStealCount,
+      ${nb('steal_defense_opportunity')} AS foldToStealOppCount,
+      SUM(${NONBOMB} * hp.saw_flop) AS sawFlopNonBombCount,
+      SUM(CASE WHEN h.table_type != 'bombpot' AND hp.saw_flop = 1 THEN hp.went_to_showdown ELSE 0 END) AS wtsdCount,
+      ${nb('won_at_showdown')} AS wonAtShowdownCount,
+      SUM(CASE WHEN h.table_type != 'bombpot' AND hp.saw_flop = 1 THEN hp.won_when_saw_flop ELSE 0 END) AS wwsfCount,
+      SUM(hp.postflop_agg_count) AS aggCount,
+      SUM(hp.postflop_agg_denom) AS aggDenom,
+      SUM(hp.cbet_flop) AS cbetFlopCount, SUM(hp.cbet_opportunity_flop) AS cbetFlopOppCount,
+      SUM(hp.cbet_turn) AS cbetTurnCount, SUM(hp.cbet_opportunity_turn) AS cbetTurnOppCount,
+      SUM(hp.cbet_river) AS cbetRiverCount, SUM(hp.cbet_opportunity_river) AS cbetRiverOppCount,
+      SUM(hp.folded_to_cbet_flop) AS foldToCbetFlopCount, SUM(hp.faced_cbet_opportunity_flop) AS foldToCbetFlopOppCount,
+      SUM(hp.folded_to_cbet_turn) AS foldToCbetTurnCount, SUM(hp.faced_cbet_opportunity_turn) AS foldToCbetTurnOppCount,
+      SUM(hp.folded_to_cbet_river) AS foldToCbetRiverCount, SUM(hp.faced_cbet_opportunity_river) AS foldToCbetRiverOppCount,
+      SUM(hp.check_raise_flop) AS checkRaiseFlopCount, SUM(hp.check_raise_opportunity_flop) AS checkRaiseFlopOppCount,
+      SUM(hp.check_raise_turn) AS checkRaiseTurnCount, SUM(hp.check_raise_opportunity_turn) AS checkRaiseTurnOppCount,
+      SUM(hp.check_raise_river) AS checkRaiseRiverCount, SUM(hp.check_raise_opportunity_river) AS checkRaiseRiverOppCount
+    FROM hand_players hp
+    JOIN hands h ON h.hand_id = hp.hand_id
+    WHERE hp.player_name IN (${placeholders}) AND h.skipped = 0
+    GROUP BY hp.player_name
+  `).all(...names);
+
+  const pct = (num, denom) => (denom ? Math.round((num / denom) * 100) : null);
+  const result = {};
+  for (const r of rows) {
+    result[r.name] = {
+      hands: r.hands,
+      vpip: pct(r.vpipCount, r.nonBombHands),
+      pfr: pct(r.pfrCount, r.nonBombHands),
+      limp: pct(r.limpCount, r.nonBombHands),
+      threeBet: pct(r.threeBetCount, r.threeBetOppCount),
+      foldToThreeBet: pct(r.foldToThreeBetCount, r.foldToThreeBetOppCount),
+      fourBet: pct(r.fourBetCount, r.fourBetOppCount),
+      squeeze: pct(r.squeezeCount, r.squeezeOppCount),
+      rfi: pct(r.rfiCount, r.rfiOppCount),
+      attemptSteal: pct(r.stealCount, r.stealOppCount),
+      foldToSteal: pct(r.foldToStealCount, r.foldToStealOppCount),
+      aggPct: pct(r.aggCount, r.aggDenom),
+      wtsd: pct(r.wtsdCount, r.sawFlopNonBombCount),
+      wonAtShowdown: pct(r.wonAtShowdownCount, r.wtsdCount),
+      wonWhenSawFlop: pct(r.wwsfCount, r.sawFlopNonBombCount),
+      cbetFlop: pct(r.cbetFlopCount, r.cbetFlopOppCount),
+      cbetTurn: pct(r.cbetTurnCount, r.cbetTurnOppCount),
+      cbetRiver: pct(r.cbetRiverCount, r.cbetRiverOppCount),
+      foldToCbetFlop: pct(r.foldToCbetFlopCount, r.foldToCbetFlopOppCount),
+      foldToCbetTurn: pct(r.foldToCbetTurnCount, r.foldToCbetTurnOppCount),
+      foldToCbetRiver: pct(r.foldToCbetRiverCount, r.foldToCbetRiverOppCount),
+      checkRaiseFlop: pct(r.checkRaiseFlopCount, r.checkRaiseFlopOppCount),
+      checkRaiseTurn: pct(r.checkRaiseTurnCount, r.checkRaiseTurnOppCount),
+      checkRaiseRiver: pct(r.checkRaiseRiverCount, r.checkRaiseRiverOppCount),
+    };
+  }
+  return result;
 }
 
 /**
@@ -480,11 +1047,26 @@ function getHandById(db, handId, perspectivePlayer) {
     wentToShowdown: player ? !!player.went_to_showdown : null,
     won: player ? !!player.won : null,
     evAdjustmentBB: player ? player.ev_adjustment_bb : null,
+    starred: !!hand.starred,
   };
+}
+
+/**
+ * Toggles/sets a hand's starred flag — a plain, direct UPDATE, deliberately
+ * NOT routed through UPSERT_HAND_SQL/importFileIntoStore's re-import path
+ * (see the `starred` column's own comment in src/db.js for why: it must
+ * survive re-imports untouched, which is exactly what NOT being part of
+ * that INSERT/UPSERT already guarantees — this is the only code path that
+ * ever changes it).
+ */
+function setHandStarred(db, handId, starred) {
+  db.prepare('UPDATE hands SET starred = ? WHERE hand_id = ?').run(starred ? 1 : 0, handId);
 }
 
 module.exports = {
   buildHandRecords, getConvertedText, importFileIntoStore, queryHands, getDistinctValues,
   queryRawHandsForStats, getHandById, getHeroPlayerNames, getAllPlayerNames,
-  getTotalHandCount, backfillDeepStats,
+  getTotalHandCount, backfillDeepStats, backfillEVAdjustments, getQuickPlayerStats,
+  getLiveHudStats,
+  setHandStarred,
 };

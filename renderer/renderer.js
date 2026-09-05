@@ -14,9 +14,19 @@ const fileSummaryToggle = document.getElementById('fileSummaryToggle');
 const clearBtn = document.getElementById('clearBtn');
 const convertBtn = document.getElementById('convertBtn');
 const importDbBtn = document.getElementById('importDbBtn');
-const replaceHeroToggle = document.getElementById('replaceHeroToggle');
+const liveSyncStatusBadge = document.getElementById('liveSyncStatusBadge');
+const liveSyncFolderPath = document.getElementById('liveSyncFolderPath');
+const liveSyncChooseFolderBtn = document.getElementById('liveSyncChooseFolderBtn');
+const liveSyncToggleBtn = document.getElementById('liveSyncToggleBtn');
+const liveSyncRefreshNowBtn = document.getElementById('liveSyncRefreshNowBtn');
+const liveSyncStatusText = document.getElementById('liveSyncStatusText');
+const hudOverlayStatusBadge = document.getElementById('hudOverlayStatusBadge');
+const hudOverlayToggleBtn = document.getElementById('hudOverlayToggleBtn');
+const hudOverlayStatusText = document.getElementById('hudOverlayStatusText');
 const exportCountLabel = document.getElementById('exportCountLabel');
 const exportFormat = document.getElementById('exportFormat');
+const exportReplaceHeroToggle = document.getElementById('exportReplaceHeroToggle');
+const exportExcludeBombPotsToggle = document.getElementById('exportExcludeBombPotsToggle');
 const exportBtn = document.getElementById('exportBtn');
 const backupBtn = document.getElementById('backupBtn');
 const restoreBtn = document.getElementById('restoreBtn');
@@ -29,8 +39,24 @@ const statsCards = document.getElementById('statsCards');
 const statsChartWrap = document.getElementById('statsChartWrap');
 const statsChart = document.getElementById('statsChart');
 const statsCaveat = document.getElementById('statsCaveat');
+const appFooter = document.getElementById('appFooter');
+
+// Keeps main's bottom padding (--footer-space, see style.css) matched to
+// the fixed footer's actual rendered height, whatever that happens to be —
+// the caveat text's length varies (grows as more stats get their own
+// explanatory sentence, shrinks to empty on the no-hands-matched screen),
+// and a ResizeObserver reacts to every cause of that height changing
+// (text content, window width reflowing the wrapped lines, font load)
+// without needing to hook each individual call site that touches
+// statsCaveat.textContent.
+function syncFooterSpace() {
+  document.documentElement.style.setProperty('--footer-space', `${appFooter.offsetHeight + 14}px`);
+}
+new ResizeObserver(syncFooterSpace).observe(appFooter);
+syncFooterSpace();
 const loadingOverlay = document.getElementById('loadingOverlay');
 const loadingText = document.getElementById('loadingText');
+const bootOverlay = document.getElementById('bootOverlay');
 
 // Hands & Stats (merged) tab
 const tabButtons = [...document.querySelectorAll('.tab-btn')];
@@ -39,15 +65,20 @@ const tabContents = {
   hands: document.getElementById('tabHands'),
   graph: document.getElementById('tabGraph'),
 };
+const hudHeroLabel = document.getElementById('hudHeroLabel');
+const hudTable = document.getElementById('hudTable');
 const advancedGraphLabel = document.getElementById('advancedGraphLabel');
 const advancedGraphChart = document.getElementById('advancedGraphChart');
 const legendTotal = document.getElementById('legendTotal');
 const legendShowdown = document.getElementById('legendShowdown');
 const legendNonShowdown = document.getElementById('legendNonShowdown');
+const legendEV = document.getElementById('legendEV');
 const handsDbLabel = document.getElementById('handsDbLabel');
 const handsTableHeadRow = document.getElementById('handsTableHeadRow');
 const handsTableBody = document.getElementById('handsTableBody');
 const filterPlayer = document.getElementById('filterPlayer');
+const filterPlayerSearch = document.getElementById('filterPlayerSearch');
+const filterPlayerDropdown = document.getElementById('filterPlayerDropdown');
 const filterDateFrom = document.getElementById('filterDateFrom');
 const filterDateTo = document.getElementById('filterDateTo');
 const filterPosition = document.getElementById('filterPosition');
@@ -58,8 +89,38 @@ const filterWtsd = document.getElementById('filterWtsd');
 const filterSawFlop = document.getElementById('filterSawFlop');
 const filterPotBbMin = document.getElementById('filterPotBbMin');
 const filterPotBbMax = document.getElementById('filterPotBbMax');
-const filterSearch = document.getElementById('filterSearch');
+const filterIncludeBombPots = document.getElementById('filterIncludeBombPots');
+const allPlayersDatalist = document.getElementById('allPlayersDatalist');
+const advancedFiltersToggle = document.getElementById('advancedFiltersToggle');
+const advancedFiltersPanel = document.getElementById('advancedFiltersPanel');
 const filterResetBtn = document.getElementById('filterResetBtn');
+
+// Advanced Filters — the "Common Filters" / "Actions and Opportunities" set
+// PokerTracker/Hold'em Manager/Hand2Note all treat as standard (see
+// src/handStore.js buildWhereClause for the matching backend side). Listed
+// once here as [filterKey, elementId] pairs rather than hand-declared three
+// separate times over (element refs, currentFilters(), reset) the way the
+// much shorter main filters-bar list above does — with 28 of these, a typo
+// in one of three places would silently desync a filter from its control.
+const ADVANCED_FILTER_FIELDS = [
+  ['vsPlayer', 'filterVsPlayer'],
+  ['vpip', 'filterVpip'], ['pfr', 'filterPfr'], ['rfi', 'filterRfi'],
+  ['coldCall', 'filterColdCall'], ['limped', 'filterLimped'],
+  ['threeBet', 'filterThreeBet'], ['foldedToThreeBet', 'filterFoldedToThreeBet'],
+  ['fourBet', 'filterFourBet'], ['foldedToFourBet', 'filterFoldedToFourBet'],
+  ['squeeze', 'filterSqueeze'], ['attemptSteal', 'filterAttemptSteal'],
+  ['foldedToSteal', 'filterFoldedToSteal'],
+  ['cbetFlop', 'filterCbetFlop'], ['cbetTurn', 'filterCbetTurn'], ['cbetRiver', 'filterCbetRiver'],
+  ['foldedToCbetFlop', 'filterFoldedToCbetFlop'], ['foldedToCbetTurn', 'filterFoldedToCbetTurn'], ['foldedToCbetRiver', 'filterFoldedToCbetRiver'],
+  ['checkRaiseFlop', 'filterCheckRaiseFlop'], ['checkRaiseTurn', 'filterCheckRaiseTurn'], ['checkRaiseRiver', 'filterCheckRaiseRiver'],
+  ['wonAtShowdown', 'filterWonAtShowdown'], ['wonWhenSawFlop', 'filterWonWhenSawFlop'],
+  ['runItTwice', 'filterRunItTwice'],
+  ['stackBbMin', 'filterStackBbMin'], ['stackBbMax', 'filterStackBbMax'],
+  ['stakesBbMin', 'filterStakesBbMin'], ['stakesBbMax', 'filterStakesBbMax'],
+];
+const advancedFilterEls = Object.fromEntries(
+  ADVANCED_FILTER_FIELDS.map(([key, id]) => [key, document.getElementById(id)]),
+);
 const handsPrevBtn = document.getElementById('handsPrevBtn');
 const handsNextBtn = document.getElementById('handsNextBtn');
 const handsPageLabel = document.getElementById('handsPageLabel');
@@ -151,6 +212,166 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.add('hidden'), 2200);
 }
 
+// The one-time database backfill (see main.js/src/backfillWorker.js) now
+// runs on a background worker thread specifically so it never blocks this
+// window — the app stays fully usable while it runs, which is why there's
+// no "please wait" overlay here for it. This only surfaces the outcome:
+// silent on a normal launch (the common case — nothing left to backfill,
+// which is most launches after the first one following an update), a brief
+// toast plus a quiet re-fetch of whatever's currently on screen if it
+// actually found and fixed something.
+window.weplayConverter.onBackfillStatus((status) => {
+  if (status.phase === 'done' && (status.deepStatsFixed > 0 || status.evFixed > 0)) {
+    showToast('Finished a one-time database update in the background — stats refreshed.');
+    if (mainState.loaded) refreshEverything({ quiet: true });
+  }
+});
+
+// ── Live Sync ──────────────────────────────────────────────────────────
+// Watches Weplay's own hand-history folder (src/liveSync.js, driven from
+// main.js) and imports new hands as they land while you play. The click
+// handler below owns the "just started/stopped" transition directly
+// (enabling the button, flipping the badge) rather than waiting on the
+// push event for that — a catch-up scan that finds nothing new (an empty
+// or already-fully-imported folder) never fires onLiveSyncStatus at all,
+// which would otherwise leave the button stuck disabled forever on a
+// successful-but-uneventful start.
+function setLiveSyncBadge(running) {
+  liveSyncStatusBadge.textContent = running ? 'On' : 'Off';
+  liveSyncStatusBadge.classList.toggle('live-sync-on', running);
+  liveSyncStatusBadge.classList.toggle('live-sync-off', !running);
+  liveSyncToggleBtn.textContent = running ? 'Stop Live Sync' : 'Start Live Sync';
+}
+
+liveSyncChooseFolderBtn.addEventListener('click', async () => {
+  const { folderPath } = await window.weplayConverter.pickLiveSyncFolder();
+  if (folderPath) {
+    liveSyncFolderPath.value = folderPath;
+    liveSyncToggleBtn.disabled = false;
+  }
+});
+
+liveSyncToggleBtn.addEventListener('click', async () => {
+  const running = liveSyncStatusBadge.classList.contains('live-sync-on');
+  liveSyncToggleBtn.disabled = true;
+  try {
+    if (running) {
+      await window.weplayConverter.stopLiveSync();
+      setLiveSyncBadge(false);
+      liveSyncStatusText.textContent = 'Stopped.';
+    } else {
+      const result = await window.weplayConverter.startLiveSync(liveSyncFolderPath.value);
+      if (result.error) {
+        showToast(result.error);
+      } else {
+        setLiveSyncBadge(true);
+        liveSyncStatusText.textContent = 'Watching for new hands…';
+      }
+    }
+  } catch (err) {
+    console.error('Live Sync toggle failed:', err);
+    showToast('Something went wrong — see the console for details.');
+  } finally {
+    liveSyncToggleBtn.disabled = false;
+  }
+});
+
+// Actually checks the Live Sync folder for new/changed files right now
+// (bypassing fs.watch's 1s debounce, and covering the case where a change
+// was somehow missed entirely) before refreshing the Hands/Stats/Graph —
+// a plain UI re-fetch alone can't surface anything Live Sync hasn't
+// already imported, which used to be this button's whole behavior.
+// rescanLiveSyncNow() no-ops (triggered: false) when Live Sync isn't
+// running, so this still works as a plain "re-fetch what's already in the
+// database" refresh in that case, same as before.
+liveSyncRefreshNowBtn.addEventListener('click', async () => {
+  liveSyncRefreshNowBtn.disabled = true;
+  try {
+    const rescan = await window.weplayConverter.rescanLiveSyncNow();
+    // resetPage: true — a deliberate "check for new hands" click should
+    // actually show them, not leave you sitting on whatever page you were
+    // already browsing while newly-imported hands sort to the top (default
+    // sort is newest-first) out of view below page 1.
+    if (mainState.loaded) await refreshEverything({ quiet: false, resetPage: true });
+    else await loadHandsAndStats();
+    if (rescan && rescan.timedOut) showToast('Refreshed, but the Live Sync check timed out — see the status line above.');
+    else if (rescan && rescan.triggered && rescan.filesProcessed > 0) showToast(`Refreshed — found ${rescan.filesProcessed} changed file(s).`);
+    else showToast('Refreshed.');
+  } catch (err) {
+    console.error('Manual refresh failed:', err);
+    showToast('Refresh failed — see the console for details.');
+  } finally {
+    liveSyncRefreshNowBtn.disabled = false;
+  }
+});
+
+// Ongoing updates only — every debounced rescan that actually found a
+// changed file (src/liveSync.js only calls onChange when filesProcessed >
+// 0 or there's an error, so this stays silent through the many rescans
+// that find nothing, which is most of them).
+window.weplayConverter.onLiveSyncStatus((status) => {
+  setLiveSyncBadge(status.running);
+  const now = new Date().toLocaleTimeString();
+  if (status.errors && status.errors.length > 0) {
+    liveSyncStatusText.textContent = `${now} — ${status.errors.join(' ')}`;
+    return;
+  }
+  const parts = [`${status.filesProcessed} file(s) rescanned`];
+  if (status.added) parts.push(`${status.added} new hand(s)`);
+  if (status.updated) parts.push(`${status.updated} updated`);
+  liveSyncStatusText.textContent = `${now} — ${parts.join(', ')}.`;
+  if (status.added > 0 && mainState.loaded) refreshEverything({ quiet: true });
+});
+
+// Restores whatever Live Sync's own state already was on load — it may
+// have auto-resumed in main.js (resumeLiveSyncIfEnabled) before this
+// window even finished loading, so this tab's controls need to reflect
+// that reality, not always start blank.
+window.weplayConverter.getLiveSyncState().then((liveSyncState) => {
+  if (liveSyncState.folderPath) liveSyncFolderPath.value = liveSyncState.folderPath;
+  liveSyncToggleBtn.disabled = !liveSyncState.folderPath;
+  setLiveSyncBadge(liveSyncState.running);
+});
+
+// ── Table HUD ──────────────────────────────────────────────────────────
+// Same on/off shape as Live Sync above, but there's no folder to pick — it
+// reads the same live hand-history files Live Sync is already watching
+// (see main.js's 'start-hud-overlay' handler), so the only control here is
+// the toggle itself.
+function setHudOverlayBadge(running) {
+  hudOverlayStatusBadge.textContent = running ? 'On' : 'Off';
+  hudOverlayStatusBadge.classList.toggle('live-sync-on', running);
+  hudOverlayStatusBadge.classList.toggle('live-sync-off', !running);
+  hudOverlayToggleBtn.textContent = running ? 'Stop Table HUD' : 'Start Table HUD';
+}
+
+hudOverlayToggleBtn.addEventListener('click', async () => {
+  const running = hudOverlayStatusBadge.classList.contains('live-sync-on');
+  hudOverlayToggleBtn.disabled = true;
+  try {
+    if (running) {
+      await window.weplayConverter.stopHudOverlay();
+      setHudOverlayBadge(false);
+      hudOverlayStatusText.textContent = 'Stopped.';
+    } else {
+      const result = await window.weplayConverter.startHudOverlay();
+      if (result.error) {
+        showToast(result.error);
+      } else {
+        setHudOverlayBadge(true);
+        hudOverlayStatusText.textContent = 'Watching for open tables…';
+      }
+    }
+  } catch (err) {
+    console.error('Table HUD toggle failed:', err);
+    showToast('Something went wrong — see the console for details.');
+  } finally {
+    hudOverlayToggleBtn.disabled = false;
+  }
+});
+
+window.weplayConverter.getHudOverlayState().then((hudState) => setHudOverlayBadge(hudState.running));
+
 function buildSupportReport(fileName, hand) {
   const lines = [];
   lines.push('Weplay Hand Converter — support report');
@@ -181,7 +402,7 @@ function formatBytes(bytes) {
 
 function extractHandIds(content) {
   const ids = [];
-  const re = /Weplay Hand #(\d+)/g;
+  const re = /(?:Weplay|VanillaPoker) Hand #(\d+)/g;
   let m;
   while ((m = re.exec(content))) ids.push(m[1]);
   return ids;
@@ -347,7 +568,10 @@ convertBtn.addEventListener('click', async () => {
   setBusy(true, 'Converting…');
   let results = null;
   try {
-    const options = { replaceHeroName: replaceHeroToggle.checked };
+    // Always Hero, matching CoinPoker's own export convention — no longer
+    // user-configurable here (see exportReplaceHeroToggle for the one place
+    // that option now actually lives, on the Export from Database output).
+    const options = { replaceHeroName: true };
     results = await window.weplayConverter.convertFiles(state.files, options);
     state.results = results;
     renderResults(results);
@@ -503,7 +727,7 @@ let externalFilters = {};
 const mainState = { loaded: false };
 
 function currentFilters() {
-  return {
+  const filters = {
     perspectivePlayer: filterPlayer.value || undefined,
     dateFrom: filterDateFrom.value || undefined,
     dateTo: filterDateTo.value || undefined,
@@ -515,8 +739,18 @@ function currentFilters() {
     sawFlop: filterSawFlop.value || undefined,
     potBbMin: filterPotBbMin.value || undefined,
     potBbMax: filterPotBbMax.value || undefined,
-    search: filterSearch.value.trim() || undefined,
+    // Only ever sent as an explicit `false` — omitted (undefined) for
+    // "Yes", matching every other filter's "no filter applied" shape,
+    // since "Yes" is "include everything," the same as not filtering at all.
+    includeBombPots: filterIncludeBombPots.value === 'no' ? false : undefined,
   };
+  // Trimmed, not just `|| undefined` — matters for filterVsPlayer (free
+  // text, unlike every other advanced filter's select/number input, where
+  // trimming is a harmless no-op) so a stray leading/trailing space typed
+  // into the opponent-name box doesn't silently turn into a filter that can
+  // never match anything.
+  for (const [key, el] of Object.entries(advancedFilterEls)) filters[key] = (el.value || '').trim() || undefined;
+  return filters;
 }
 
 // "6max-ante" -> "6-max (Ante)", "8max-bombpot" -> "8-max (Bomb Pot)" — built
@@ -539,6 +773,20 @@ function fmtPct(n) {
   return n == null ? '—' : `${n.toFixed(1)}%`;
 }
 
+// "$0.25/$0.50" -> "NL50" — the poker-community limit name, always derived
+// from the big blind itself (NL = 100 * bb in $), never a hardcoded
+// per-stake lookup table. stakesLabel is always "$sb/$bb" (see stats.js's
+// analyzeHand), the same format handReplay.js and hand-detail.js already
+// parse bb out of elsewhere in this app — reusing that exact pattern here
+// rather than plumbing a separate numeric bb value through every call site
+// that only ever had the formatted label string to begin with.
+function formatStakesLimit(stakesLabel) {
+  if (!stakesLabel) return stakesLabel;
+  const m = /\$([0-9.]+)$/.exec(stakesLabel);
+  if (!m) return stakesLabel;
+  return `NL${Math.round(parseFloat(m[1]) * 100)}`;
+}
+
 function moneyClass(n) {
   if (n == null || n === 0) return '';
   return n > 0 ? 'positive' : 'negative';
@@ -548,8 +796,10 @@ function statCard(label, value, valueClass, sub) {
   const card = document.createElement('div');
   card.className = 'stat-card';
   card.innerHTML = `
-    <div class="stat-card-label">${escapeHtml(label)}</div>
-    <div class="stat-card-value ${valueClass || ''}">${value}</div>
+    <div class="stat-card-main">
+      <span class="stat-card-label">${escapeHtml(label)}</span>
+      <span class="stat-card-value ${valueClass || ''}">${value}</span>
+    </div>
     ${sub ? `<div class="stat-card-sub">${sub}</div>` : ''}
   `;
   return card;
@@ -562,6 +812,16 @@ function statCard(label, value, valueClass, sub) {
 // silently blend every hero's results together (e.g. your own stats mixed
 // with a friend's imported hands), which is exactly the trap flagged when
 // multi-player storage was first built.
+//
+// #filterPlayer is a real <select> but never shown — it's kept purely as
+// the value-holder every existing call site (currentFilters(), the
+// auto-refresh `change` listener, reset) already reads/writes, so none of
+// that needed to change. #filterPlayerSearch is the actual visible/typeable
+// control; selecting a name sets #filterPlayer.value and dispatches a
+// synthetic 'change' event on it, which is what actually triggers a refresh
+// — see selectPlayer().
+let allPlayersCache = [];
+
 async function refreshPlayerOptions() {
   // Every recognized player, not just imported heroes — deep stats are
   // computed for every seated player at import time now (see
@@ -570,6 +830,7 @@ async function refreshPlayerOptions() {
   // hands, which in practice is almost always the main user of this
   // install (their own imports vastly outnumber any single opponent's).
   const players = await window.weplayConverter.getAllPlayers();
+  allPlayersCache = players;
   const prevValue = filterPlayer.value;
   filterPlayer.innerHTML = players.map((p) => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)} (${p.handCount.toLocaleString()})</option>`).join('');
   if (players.some((p) => p.name === prevValue)) {
@@ -577,7 +838,105 @@ async function refreshPlayerOptions() {
   } else if (players.length) {
     filterPlayer.value = players[0].name; // most hands = default perspective
   }
+  // Keeps the visible search box showing the real current selection — but
+  // never while someone's actively typing in it (a quiet Live Sync refresh
+  // firing mid-search shouldn't yank away what they're in the middle of
+  // typing).
+  if (document.activeElement !== filterPlayerSearch) {
+    filterPlayerSearch.value = filterPlayer.value || '';
+  }
+  // Autocomplete suggestions for the "Vs Player" advanced filter — the same
+  // name list as the dropdown above, just as free-typed suggestions rather
+  // than a closed set, since <input list="..."> still accepts any text
+  // typed (matched against buildWhereClause's exact hp2.player_name = ?, so
+  // getting the spelling right still matters — this is a convenience, not a
+  // hard constraint on what can be typed).
+  allPlayersDatalist.innerHTML = players.map((p) => `<option value="${escapeHtml(p.name)}"></option>`).join('');
 }
+
+// Prefix-only, case-insensitive — deliberately not "contains anywhere":
+// with a big enough opponent pool, a substring match turns "type the start
+// of the name you remember" into scrolling past every name that happens to
+// contain those letters in the middle. An empty query shows everyone,
+// sorted by hand count same as the underlying dropdown always was.
+function renderPlayerSearchOptions(query) {
+  const q = query.trim().toLowerCase();
+  const matches = q ? allPlayersCache.filter((p) => p.name.toLowerCase().startsWith(q)) : allPlayersCache;
+  filterPlayerDropdown.innerHTML = matches.length
+    ? matches.map((p) => `
+        <div class="player-search-option" data-player-name="${escapeHtml(p.name)}">${escapeHtml(p.name)}<span class="player-search-count">(${p.handCount.toLocaleString()})</span></div>
+      `).join('')
+    : '<div class="player-search-empty">No matching players</div>';
+  filterPlayerDropdown.classList.remove('hidden');
+}
+
+function selectPlayer(name) {
+  filterPlayer.value = name;
+  filterPlayerSearch.value = name;
+  filterPlayerDropdown.classList.add('hidden');
+  // Not a real user click on the hidden <select> — dispatched manually so
+  // the exact same listener that already reacts to changing that dropdown
+  // (line ~1660's auto-refresh loop) fires here too, without needing its
+  // own separate handler.
+  filterPlayer.dispatchEvent(new Event('change'));
+}
+
+function openPlayerSearchDropdown() {
+  filterPlayerSearch.select(); // typing immediately replaces the shown name
+  renderPlayerSearchOptions('');
+}
+
+filterPlayerSearch.addEventListener('focus', openPlayerSearchDropdown);
+
+// The 'focus' event alone isn't enough: it only fires on a genuine
+// unfocused -> focused transition, never when clicking an input that
+// already has focus — and selectPlayer() deliberately keeps focus on this
+// input after a selection (see the dropdown's own mousedown handler below),
+// so clicking right back into the box after picking a player produced no
+// 'focus' event at all, leaving the dropdown stuck closed until focus was
+// lost and regained via some other element first. Re-checking on 'click'
+// covers exactly that gap — gated on the dropdown currently being hidden,
+// so a click made to reposition the cursor while it's already open and
+// mid-search doesn't reset the filter/re-select the text out from under
+// whatever's being typed.
+filterPlayerSearch.addEventListener('click', () => {
+  if (filterPlayerDropdown.classList.contains('hidden')) openPlayerSearchDropdown();
+});
+
+filterPlayerSearch.addEventListener('input', () => {
+  renderPlayerSearchOptions(filterPlayerSearch.value);
+});
+
+filterPlayerSearch.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const first = filterPlayerDropdown.querySelector('[data-player-name]');
+    if (first) selectPlayer(first.dataset.playerName);
+  } else if (e.key === 'Escape') {
+    filterPlayerSearch.value = filterPlayer.value || '';
+    filterPlayerDropdown.classList.add('hidden');
+    filterPlayerSearch.blur();
+  }
+});
+
+// Losing focus without picking anything (tabbing away, clicking dead space)
+// discards whatever was typed and snaps the visible text back to the real
+// current selection — the search box is a way to CHANGE the selection, not
+// a second place that selection's text lives.
+filterPlayerSearch.addEventListener('blur', () => {
+  filterPlayerDropdown.classList.add('hidden');
+  filterPlayerSearch.value = filterPlayer.value || '';
+});
+
+// mousedown (not click) on the dropdown, preventDefault'd, so clicking an
+// option never actually blurs the search input first — a plain blur
+// listener above would otherwise hide the dropdown (and revert the text)
+// BEFORE the option's own click handler ever got a chance to fire.
+filterPlayerDropdown.addEventListener('mousedown', (e) => e.preventDefault());
+filterPlayerDropdown.addEventListener('click', (e) => {
+  const opt = e.target.closest('[data-player-name]');
+  if (opt) selectPlayer(opt.dataset.playerName);
+});
 
 async function refreshFilterOptions() {
   const opts = await window.weplayConverter.getFilterOptions(externalFilters);
@@ -585,7 +944,10 @@ async function refreshFilterOptions() {
   const prevStakes = filterStakes.value;
   const prevTableCategory = filterTableCategory.value;
   filterPosition.innerHTML = '<option value="">All</option>' + opts.positions.map((p) => `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`).join('');
-  filterStakes.innerHTML = '<option value="">All</option>' + opts.stakes.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('');
+  // Value stays the raw "$sb/$bb" label — that's what the backend filter
+  // actually matches against (see buildWhereClause's f.stakesLabel) — only
+  // the displayed text is the NL-formatted limit name.
+  filterStakes.innerHTML = '<option value="">All</option>' + opts.stakes.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(formatStakesLimit(s))}</option>`).join('');
   filterTableCategory.innerHTML = '<option value="">All</option>' + opts.tableCategories.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(formatTableCategory(c))}</option>`).join('');
   if (opts.positions.includes(prevPos)) filterPosition.value = prevPos;
   if (opts.stakes.includes(prevStakes)) filterStakes.value = prevStakes;
@@ -597,9 +959,26 @@ async function refreshFilterOptions() {
 async function refreshStats() {
   const payload = await window.weplayConverter.getPersistentStats(externalFilters);
   renderStats(payload);
+  renderHudTable(payload.stats);
   renderAdvancedGraph(payload.stats.handTimeline, externalFilters.wentToShowdown);
 }
 
+// Whichever stake bucket (from aggregateStats' byStake) has the most hands —
+// "Home" in the Player Overview sense: the stake this player actually
+// grinds, not just whatever the current filter happens to be scoped to.
+function homeStakesLabel(byStake) {
+  let best = null;
+  for (const bucket of Object.values(byStake || {})) {
+    if (!best || bucket.hands > best.hands) best = bucket;
+  }
+  return best ? formatStakesLimit(best.stakesLabel) : null;
+}
+
+// Player Overview: a compact, at-a-glance summary — the same 9 headline
+// numbers Dojson's HUD shows at the bottom of its player-lookup view, plus
+// the results-over-time chart. The full stat breakdown lives in the
+// Advanced Stats tab's HUD table (see renderHudTable) instead of being
+// dumped here too.
 function renderStats(payload) {
   const { stats, excludedCount, evBb100, evAdjustedHandCount } = payload;
 
@@ -616,40 +995,14 @@ function renderStats(payload) {
   }
 
   statsCards.appendChild(statCard('Hands', stats.hands.toLocaleString(), '', 'matching current filters'));
-  statsCards.appendChild(statCard('Net Result', fmtMoney(stats.netResult), moneyClass(stats.netResult)));
-  statsCards.appendChild(statCard('Winrate', stats.bb100 != null ? `${stats.bb100.toFixed(1)} bb/100` : '—', moneyClass(stats.bb100)));
-  statsCards.appendChild(statCard('EV Winrate', evBb100 != null ? `${evBb100.toFixed(1)} bb/100` : '—', moneyClass(evBb100), evAdjustedHandCount ? `${evAdjustedHandCount} all-in adj.` : 'no all-ins yet'));
+  statsCards.appendChild(statCard('Winnings', fmtMoney(stats.netResult), moneyClass(stats.netResult), stats.totalRakePaid > 0 ? `${fmtMoney(stats.totalRakePaid)} raked` : ''));
   statsCards.appendChild(statCard('VPIP', fmtPct(stats.vpip), '', `${stats.nonBombPotHands} hands`));
+  statsCards.appendChild(statCard('Home', homeStakesLabel(stats.byStake) || '—', ''));
+  statsCards.appendChild(statCard('Winrate', stats.bb100 != null ? `${stats.bb100.toFixed(1)} bb/100` : '—', moneyClass(stats.bb100)));
   statsCards.appendChild(statCard('PFR', fmtPct(stats.pfr), ''));
-  statsCards.appendChild(statCard('RFI', fmtPct(stats.rfi), '', `${stats.rfiOppCount} opps`));
-  statsCards.appendChild(statCard('Limp', fmtPct(stats.limp), ''));
-  statsCards.appendChild(statCard('Cold Call', fmtPct(stats.coldCall), '', `${stats.coldCallOppCount} opps`));
-  statsCards.appendChild(statCard('3-Bet', fmtPct(stats.threeBet), '', `${stats.threeBetOppCount} opps`));
-  statsCards.appendChild(statCard('Fold to 3-Bet', fmtPct(stats.foldToThreeBet), ''));
-  statsCards.appendChild(statCard('4-Bet', fmtPct(stats.fourBet), '', `${stats.fourBetOppCount} opps`));
-  statsCards.appendChild(statCard('Fold to 4-Bet', fmtPct(stats.foldToFourBet), '', `${stats.foldToFourBetOppCount} opps`));
-  statsCards.appendChild(statCard('Squeeze', fmtPct(stats.squeeze), '', `${stats.squeezeOppCount} opps`));
-  statsCards.appendChild(statCard('Attempt to Steal', fmtPct(stats.attemptSteal), '', `${stats.stealOppCount} opps`));
-  statsCards.appendChild(statCard('Fold to Steal', fmtPct(stats.foldToSteal), '', `${stats.foldToStealOppCount} opps`));
-  statsCards.appendChild(statCard('WTSD', fmtPct(stats.wtsd), ''));
-  statsCards.appendChild(statCard('W$SD', fmtPct(stats.wonAtShowdown), '', 'at showdown'));
-  statsCards.appendChild(statCard('W$WSF', fmtPct(stats.wonWhenSawFlop), '', 'saw flop'));
-  statsCards.appendChild(statCard('Aggression Factor', stats.aggressionFactor != null ? stats.aggressionFactor.toFixed(2) : '—', '', 'postflop'));
-  statsCards.appendChild(statCard('Flop Aggression', fmtPct(stats.flopAggression), '', `${stats.flopAggressionOpportunities} opps`));
-  statsCards.appendChild(statCard('Turn Aggression', fmtPct(stats.turnAggression), '', `${stats.turnAggressionOpportunities} opps`));
-  statsCards.appendChild(statCard('River Aggression', fmtPct(stats.riverAggression), '', `${stats.riverAggressionOpportunities} opps`));
-  statsCards.appendChild(statCard('Flop C-Bet', fmtPct(stats.flopCbet), '', `${stats.flopCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('Turn C-Bet', fmtPct(stats.turnCbet), '', `${stats.turnCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('River C-Bet', fmtPct(stats.riverCbet), '', `${stats.riverCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('Fold to Flop C-Bet', fmtPct(stats.flopFoldToCbet), '', `${stats.flopFoldToCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('Fold to Turn C-Bet', fmtPct(stats.turnFoldToCbet), '', `${stats.turnFoldToCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('Fold to River C-Bet', fmtPct(stats.riverFoldToCbet), '', `${stats.riverFoldToCbetOpportunities} opps`));
-  statsCards.appendChild(statCard('Flop Check-Raise', fmtPct(stats.flopCheckRaise), '', `${stats.flopCheckRaiseOpportunities} opps`));
-  statsCards.appendChild(statCard('Turn Check-Raise', fmtPct(stats.turnCheckRaise), '', `${stats.turnCheckRaiseOpportunities} opps`));
-  statsCards.appendChild(statCard('River Check-Raise', fmtPct(stats.riverCheckRaise), '', `${stats.riverCheckRaiseOpportunities} opps`));
-  if (stats.bombPotHands > 0) {
-    statsCards.appendChild(statCard('Bomb Pot Hands', String(stats.bombPotHands), '', 'excluded above'));
-  }
+  statsCards.appendChild(statCard('WWSF', fmtPct(stats.wonWhenSawFlop), '', ''));
+  statsCards.appendChild(statCard('Expected V', evBb100 != null ? `${evBb100.toFixed(1)} bb/100` : '—', moneyClass(evBb100), evAdjustedHandCount ? `${evAdjustedHandCount} all-in adj.` : 'no all-ins yet'));
+  statsCards.appendChild(statCard('3Bet', fmtPct(stats.threeBet), '', `${stats.threeBetOppCount} opps`));
 
   if (stats.timeline.length >= 2) {
     statsChartWrap.classList.remove('hidden');
@@ -659,13 +1012,165 @@ function renderStats(payload) {
   }
 
   const caveatParts = [];
-  caveatParts.push('VPIP, PFR, 3-Bet, and Fold to 3-Bet are all computed over non-bomb-pot hands only — a bomb pot has no preflop betting round, so including it would silently deflate every one of those rates.');
+  caveatParts.push('VPIP, PFR, 3-Bet, and Fold to 3-Bet are all computed over non-bomb-pot hands only — a bomb pot has no preflop betting round, so including it would silently deflate every one of those rates. WTSD, W$SD, and WWSF are also non-bomb-pot only — a bomb pot forces every seated player to see the flop together regardless of hand strength, which structurally lowers a per-player win rate no matter how well postflop is played.');
   if (excludedCount > 0) {
     caveatParts.push(`${excludedCount} hand(s) were excluded entirely — no cards could be attributed to a player, or the hand had no resolution anywhere in the source (a real Weplay data gap, e.g. a disconnect at showdown that was never resolved).`);
   }
   caveatParts.push('WTSD only counts a genuine multi-way contest (2+ players still active when the showdown is reached) — Weplay shows the same header text even for an uncontested fold-out, which is excluded here.');
+  caveatParts.push('Agg% (PT) and Agg% (DriveHUD) measure the exact same bets/raises on each street, just over a different denominator — Agg% (PT) counts bets, raises, calls, and checks (folds excluded), matching PokerTracker 4\'s own per-street report when checked against this app\'s converted export; Agg% (DriveHUD) also counts folds, so its denominator — and therefore its percentage — is usually a bit lower than PT\'s for the same underlying hands. Neither is "more correct," they\'re just answering slightly different questions — Aggression Factor above uses a third convention again (bets+raises over calls only, no denominator opportunities at all).');
   caveatParts.push('EV Winrate only adjusts genuine 2-player all-in-with-cards-to-come hands (both hands shown at showdown) — multi-way all-ins keep their actual result for now, since that needs separate per-opponent side-pot equity math. Equity is computed exactly for turn/river all-ins, and via Monte Carlo sampling (10,000 trials, ~0.4 percentage points of statistical noise) for preflop/flop all-ins, where exact enumeration would mean up to ~1.7 million board combinations per hand.');
   statsCaveat.textContent = caveatParts.join(' ');
+}
+
+// ── Advanced Stats: HUD table ────────────────────────────────────────────
+// A Dojson-HUD-style grouped breakdown of every stat stats.js computes,
+// built from the exact same payload.stats refreshStats() already fetched —
+// no separate IPC call. Grouped into labeled sections (rather than Dojson's
+// multiple clickable sub-tabs) since this app doesn't have Dojson's extra
+// dimensions yet (IP/OOP, SRP-vs-3-bet-pot splits, site/format breakdowns —
+// all need the position-aware engine work intentionally deferred to a later
+// round). Row labels are tinted the way Dojson tints its own rows: green
+// for a proactive/aggressive action, orange for a "folded to X" one — a
+// quick visual read of "is this a stat about doing something, or giving up."
+
+function hudRow(label, value, count, kind) {
+  return { label, value, count, kind };
+}
+
+function renderHudTable(stats) {
+  hudHeroLabel.textContent = stats.hands > 0
+    ? `${stats.hands.toLocaleString()} hand${stats.hands === 1 ? '' : 's'} matching current filters`
+    : 'No hands match the current filters';
+
+  if (stats.hands === 0) {
+    hudTable.innerHTML = '<p class="hero-note">Import hands, or try Reset filters.</p>';
+    return;
+  }
+
+  const preflopGroup = {
+    title: 'Preflop',
+    rows: [
+      hudRow('VPIP', fmtPct(stats.vpip), stats.nonBombPotHands, 'pos'),
+      hudRow('PFR', fmtPct(stats.pfr), null, 'pos'),
+      hudRow('RFI', fmtPct(stats.rfi), stats.rfiOppCount, 'pos'),
+      hudRow('Limp', fmtPct(stats.limp), null, 'neutral'),
+      hudRow('Cold Call', fmtPct(stats.coldCall), stats.coldCallOppCount, 'neutral'),
+      hudRow('3-Bet', fmtPct(stats.threeBet), stats.threeBetOppCount, 'pos'),
+      hudRow('Fold to 3-Bet', fmtPct(stats.foldToThreeBet), null, 'neg'),
+      hudRow('4-Bet', fmtPct(stats.fourBet), stats.fourBetOppCount, 'pos'),
+      hudRow('Fold to 4-Bet', fmtPct(stats.foldToFourBet), stats.foldToFourBetOppCount, 'neg'),
+      hudRow('Squeeze', fmtPct(stats.squeeze), stats.squeezeOppCount, 'pos'),
+    ],
+  };
+  const stealCheckRaiseGroup = {
+    title: 'Steal & Check-Raise',
+    rows: [
+      hudRow('Attempt to Steal', fmtPct(stats.attemptSteal), stats.stealOppCount, 'pos'),
+      hudRow('Fold to Steal', fmtPct(stats.foldToSteal), stats.foldToStealOppCount, 'neg'),
+      hudRow('Flop Check-Raise', fmtPct(stats.flopCheckRaise), stats.flopCheckRaiseOpportunities, 'pos'),
+      hudRow('Turn Check-Raise', fmtPct(stats.turnCheckRaise), stats.turnCheckRaiseOpportunities, 'pos'),
+      hudRow('River Check-Raise', fmtPct(stats.riverCheckRaise), stats.riverCheckRaiseOpportunities, 'pos'),
+    ],
+  };
+  const cbetGroup = {
+    title: 'C-Bet',
+    rows: [
+      hudRow('Flop C-Bet', fmtPct(stats.flopCbet), stats.flopCbetOpportunities, 'pos'),
+      hudRow('Turn C-Bet', fmtPct(stats.turnCbet), stats.turnCbetOpportunities, 'pos'),
+      hudRow('River C-Bet', fmtPct(stats.riverCbet), stats.riverCbetOpportunities, 'pos'),
+      hudRow('Fold to Flop C-Bet', fmtPct(stats.flopFoldToCbet), stats.flopFoldToCbetOpportunities, 'neg'),
+      hudRow('Fold to Turn C-Bet', fmtPct(stats.turnFoldToCbet), stats.turnFoldToCbetOpportunities, 'neg'),
+      hudRow('Fold to River C-Bet', fmtPct(stats.riverFoldToCbet), stats.riverFoldToCbetOpportunities, 'neg'),
+    ],
+  };
+  // Float and Probe: PokerTracker's own two distinct stats (confirmed via
+  // its own forums), not one merged "Stab" number — Float is the
+  // in-position, same-street reaction to a missed continuation bet (any
+  // street); Probe is the out-of-position, next-street reaction (turn/
+  // river only, since OOP can't react same-street). See src/stats.js's
+  // Float/Probe comment for the full citation and definitions.
+  const floatProbeGroup = {
+    title: 'Float / Probe',
+    rows: [
+      hudRow('Flop Float', fmtPct(stats.flopFloat), stats.flopFloatOpportunities, 'pos'),
+      hudRow('Turn Float', fmtPct(stats.turnFloat), stats.turnFloatOpportunities, 'pos'),
+      hudRow('River Float', fmtPct(stats.riverFloat), stats.riverFloatOpportunities, 'pos'),
+      hudRow('Turn Probe', fmtPct(stats.turnProbe), stats.turnProbeOpportunities, 'pos'),
+      hudRow('River Probe', fmtPct(stats.riverProbe), stats.riverProbeOpportunities, 'pos'),
+      hudRow('Fold to Flop Float', fmtPct(stats.flopFoldToFloat), stats.flopFoldToFloatOpportunities, 'neg'),
+      hudRow('Fold to Turn Float', fmtPct(stats.turnFoldToFloat), stats.turnFoldToFloatOpportunities, 'neg'),
+      hudRow('Fold to River Float', fmtPct(stats.riverFoldToFloat), stats.riverFoldToFloatOpportunities, 'neg'),
+      hudRow('Fold to Turn Probe', fmtPct(stats.turnFoldToProbe), stats.turnFoldToProbeOpportunities, 'neg'),
+      hudRow('Fold to River Probe', fmtPct(stats.riverFoldToProbe), stats.riverFoldToProbeOpportunities, 'neg'),
+    ],
+  };
+  const barrelsGroup = {
+    title: 'Barrels',
+    rows: [
+      hudRow('Double Barrel', fmtPct(stats.doubleBarrel), stats.doubleBarrelOppCount, 'pos'),
+      hudRow('Triple Barrel', fmtPct(stats.tripleBarrel), stats.tripleBarrelOppCount, 'pos'),
+    ],
+  };
+  const aggressionGroup = {
+    title: 'Aggression & Showdown',
+    rows: [
+      hudRow('Aggression Factor', stats.aggressionFactor != null ? stats.aggressionFactor.toFixed(2) : '—', null, 'neutral'),
+      // PT Agg% (verified against a real PokerTracker 4 report generated
+      // from this app's own converted export — folds excluded from the
+      // denominator, checks included) grouped together, then Agg% (DriveHUD's
+      // convention: both folds AND checks included) grouped together — same
+      // underlying actions, two different denominators. See the caveat text
+      // below the graph for the full explanation, and streetAggPct in
+      // src/stats.js for the PokerTracker verification this was checked
+      // against.
+      hudRow('Flop Agg% (PT)', fmtPct(stats.flopAggression), stats.flopAggressionOpportunities, 'pos'),
+      hudRow('Turn Agg% (PT)', fmtPct(stats.turnAggression), stats.turnAggressionOpportunities, 'pos'),
+      hudRow('River Agg% (PT)', fmtPct(stats.riverAggression), stats.riverAggressionOpportunities, 'pos'),
+      hudRow('Flop Agg% (DriveHUD)', fmtPct(stats.flopAggPct), stats.flopAggPctOpportunities, 'pos'),
+      hudRow('Turn Agg% (DriveHUD)', fmtPct(stats.turnAggPct), stats.turnAggPctOpportunities, 'pos'),
+      hudRow('River Agg% (DriveHUD)', fmtPct(stats.riverAggPct), stats.riverAggPctOpportunities, 'pos'),
+      hudRow('WTSD', fmtPct(stats.wtsd), null, 'neutral'),
+      hudRow('W$SD', fmtPct(stats.wonAtShowdown), null, 'neutral'),
+      hudRow('W$WSF', fmtPct(stats.wonWhenSawFlop), null, 'neutral'),
+    ],
+  };
+
+  // 6 section boxes laid out across a fixed 4-column grid. Float/Probe gets
+  // its own column — real HUDs (e.g. Hold'em Manager 3's dedicated
+  // Float/Probe panel) keep it separate from both C-Bet and Steal/Check-
+  // Raise, so it doesn't get folded into either here either. The other 3
+  // columns: Preflop stands alone (already the largest section); the
+  // remaining 4 sections pair up by row-count balance — Aggression &
+  // Showdown with Barrels (barreling repeatedly IS sustained aggression),
+  // C-Bet with Steal & Check-Raise (both "taking postflop/preflop
+  // initiative" reads) — landing all 4 columns within 1-2 rows of each
+  // other in height instead of one column towering over the rest.
+  const columns = [
+    [preflopGroup],
+    [aggressionGroup, barrelsGroup],
+    [cbetGroup, stealCheckRaiseGroup],
+    [floatProbeGroup],
+  ];
+
+  const renderGroup = (g) => `
+    <div class="hud-group">
+      <h3 class="hud-group-title">${escapeHtml(g.title)}</h3>
+      <div class="hud-rows">
+        ${g.rows.map((r) => `
+          <div class="hud-row">
+            <span class="hud-row-label hud-${r.kind}">${escapeHtml(r.label)}</span>
+            <span class="hud-row-value">${r.value}${r.count != null ? `<span class="hud-row-count">${r.count}</span>` : ''}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+
+  hudTable.innerHTML = columns.map((col) => `
+    <div class="hud-column">
+      ${col.map(renderGroup).join('')}
+    </div>
+  `).join('');
 }
 
 function buildTimelineChartSvg(timeline) {
@@ -676,8 +1181,16 @@ function buildTimelineChartSvg(timeline) {
   const plotH = height - padT - padB;
 
   const values = timeline.map((t) => t.cumulative);
-  const minV = Math.min(0, ...values);
-  const maxV = Math.max(0, ...values);
+  // Loop, not Math.min/max(0, ...values) — see buildAdvancedTimelineChartSvg's
+  // matching comment: spreading into a call's arguments has a hard engine
+  // limit well within reach of a real per-hand series (this one's per-date,
+  // so far smaller in practice, but there's no reason to leave the same
+  // unsafe pattern sitting right next to the one that actually broke).
+  let minV = 0, maxV = 0;
+  for (const v of values) {
+    if (v < minV) minV = v;
+    if (v > maxV) maxV = v;
+  }
   const range = maxV - minV || 1;
 
   const xFor = (i) => padL + (i / (timeline.length - 1)) * plotW;
@@ -687,8 +1200,12 @@ function buildTimelineChartSvg(timeline) {
   const points = timeline.map((t, i) => `${xFor(i).toFixed(1)},${yFor(t.cumulative).toFixed(1)}`).join(' ');
   const areaPoints = `${padL},${zeroY} ${points} ${xFor(timeline.length - 1).toFixed(1)},${zeroY}`;
 
-  const last = timeline[timeline.length - 1];
-  const lineColor = last.cumulative >= 0 ? 'var(--ok)' : 'var(--danger)';
+  // Always green, win or lose — matches the Advanced Graph's own "Total
+  // Profit" line (src/renderer.js's buildAdvancedTimelineChartSvg), which
+  // is fixed-color regardless of sign too. Red is reserved for the
+  // no-showdown line specifically, not for "currently down" — this isn't a
+  // stock ticker where red/green track the sign of the number.
+  const lineColor = 'var(--ok)';
 
   const firstLabel = timeline[0].date;
   const lastLabel = timeline[timeline.length - 1].date;
@@ -731,9 +1248,21 @@ function buildAdvancedTimelineChartSvg(timeline, showdownFilter) {
   const totalValues = timeline.map((t) => t.cumulative);
   const showdownValues = timeline.map((t) => t.cumulativeShowdown);
   const nonShowdownValues = timeline.map((t) => t.cumulativeNonShowdown);
-  const allValues = [...totalValues, ...showdownValues, ...nonShowdownValues];
-  const dataMin = Math.min(0, ...allValues);
-  const dataMax = Math.max(0, ...allValues);
+  const evValues = timeline.map((t) => t.cumulativeEV);
+  const allValues = [...totalValues, ...showdownValues, ...nonShowdownValues, ...evValues];
+  // Plain loop, not Math.min(0, ...allValues) — spreading an array into a
+  // call's arguments is limited by the JS engine's max call-stack args
+  // (confirmed in this environment: throws "Maximum call stack size
+  // exceeded" somewhere around ~125,000 elements). allValues.length is 4x
+  // a player's total hand count (four parallel series), so any perspective
+  // player with roughly 31,000+ hands blew this up on every single load —
+  // the real cause behind "the graph just doesn't render for my main
+  // account," not a data or filter problem.
+  let dataMin = 0, dataMax = 0;
+  for (const v of allValues) {
+    if (v < dataMin) dataMin = v;
+    if (v > dataMax) dataMax = v;
+  }
   const yTicks = ChartMath.computeNiceTicks(dataMin, dataMax, 7, 5);
   const axisMin = yTicks[0];
   const axisMax = yTicks[yTicks.length - 1];
@@ -777,9 +1306,18 @@ function buildAdvancedTimelineChartSvg(timeline, showdownFilter) {
   // showdown/non-showdown isn't all zeros, and showing three lines (two of
   // them redundant or flat at zero) would just be clutter. Show exactly one
   // line, colored to match the selected bucket, not green.
+  //
+  // The EV-adjusted (yellow, dashed) line is only ever drawn alongside a
+  // showdown-inclusive selection — evAdjustmentBB is only ever non-null for
+  // hands where hero's cards were shown at showdown (see evAnalysis.js), so
+  // in the "not shown" filter it's identical to the actual-results line and
+  // would just be a redundant dashed overlay on top of it.
   let lines;
   if (showdownFilter === 'shown') {
-    lines = `<polyline points="${lineFor(totalValues)}" fill="none" stroke="var(--info)" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" />`;
+    lines = `
+      <polyline points="${lineFor(totalValues)}" fill="none" stroke="var(--info)" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" />
+      <polyline points="${lineFor(evValues)}" fill="none" stroke="var(--ev-line)" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4" />
+    `;
   } else if (showdownFilter === 'not-shown') {
     lines = `<polyline points="${lineFor(totalValues)}" fill="none" stroke="var(--danger)" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" />`;
   } else {
@@ -787,6 +1325,7 @@ function buildAdvancedTimelineChartSvg(timeline, showdownFilter) {
       <polyline points="${lineFor(nonShowdownValues)}" fill="none" stroke="var(--danger)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity="0.9" />
       <polyline points="${lineFor(showdownValues)}" fill="none" stroke="var(--info)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" opacity="0.9" />
       <polyline points="${lineFor(totalValues)}" fill="none" stroke="var(--ok)" stroke-width="2.75" stroke-linejoin="round" stroke-linecap="round" />
+      <polyline points="${lineFor(evValues)}" fill="none" stroke="var(--ev-line)" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4" />
     `;
   }
 
@@ -809,18 +1348,20 @@ function renderAdvancedGraph(handTimeline, showdownFilter) {
     legendTotal.classList.remove('hidden');
     legendShowdown.classList.remove('hidden');
     legendNonShowdown.classList.remove('hidden');
+    legendEV.classList.remove('hidden');
     return;
   }
   const first = handTimeline[0], last = handTimeline[handTimeline.length - 1];
   advancedGraphLabel.textContent = `${handTimeline.length.toLocaleString()} hands matching current filters (${first.date} to ${last.date})`;
   advancedGraphChart.innerHTML = buildAdvancedTimelineChartSvg(handTimeline, showdownFilter);
   // The legend only shows swatches for lines actually being drawn — with
-  // the "Went to Showdown" filter narrowed to one side, only one line
-  // renders (see buildAdvancedTimelineChartSvg), so showing all three
-  // swatches would advertise colors that aren't on the chart at all.
+  // the "Went to Showdown" filter narrowed to one side, only one or two
+  // lines render (see buildAdvancedTimelineChartSvg), so showing every
+  // swatch would advertise colors that aren't on the chart at all.
   legendTotal.classList.toggle('hidden', showdownFilter === 'shown' || showdownFilter === 'not-shown');
   legendShowdown.classList.toggle('hidden', showdownFilter === 'not-shown');
   legendNonShowdown.classList.toggle('hidden', showdownFilter === 'shown');
+  legendEV.classList.toggle('hidden', showdownFilter === 'not-shown');
 }
 
 // ── Hands table ──────────────────────────────────────────────────────────
@@ -851,7 +1392,7 @@ function renderCardBadges(cardsStr) {
   }).join('');
 }
 
-const SORT_LABELS = { date: 'Date', net: 'Net', stakes: 'Stakes', table: 'Table', position: 'Position', pot: 'Pot', wtsd: 'WTSD' };
+const SORT_LABELS = { date: 'Date', net: 'Net', stakes: 'Stakes', table: 'Table', position: 'Position', pot: 'Pot', wtsd: 'WTSD', starred: 'Starred' };
 
 function sortIndicator(field) {
   if (tableState.sortBy !== field) return '';
@@ -880,10 +1421,23 @@ function setSort(field) {
 // sorting, click-to-open — is DOM/CSS/mouse-events this app can actually
 // verify, unlike the third-party library approach that kept breaking in
 // ways this sandbox has no way to test ahead of time.
+// Purely local bookmarking (src/db.js's `starred` column has the full
+// rationale) — clicking anywhere in this cell toggles it in place via
+// window.weplayConverter.setHandStarred, without navigating into the hand
+// the way clicking anywhere else in the row does. The toggle target is the
+// whole <td> (see renderHandsRows, which tags it with data-star-toggle),
+// not just this glyph — a small unicode star is a fiddly click target to
+// demand precision on while someone's mid-session and glancing between
+// windows, so the entire cell answers for it.
+function renderStarCell(starred) {
+  return `<span class="hand-star${starred ? ' starred' : ''}" title="${starred ? 'Unstar this hand' : 'Star this hand'}">${starred ? '★' : '☆'}</span>`;
+}
+
 const HANDS_COLUMNS = [
+  { key: 'starred', colId: 'colStar', label: 'Mark Hand', align: 'center', sortBy: 'starred', render: renderStarCell },
   { key: 'date', colId: 'colDate', label: 'Date', sortBy: 'date' },
   { key: 'time', colId: 'colTime', label: 'Time' },
-  { key: 'stakesLabel', colId: 'colStakes', label: 'Stakes', sortBy: 'stakes' },
+  { key: 'stakesLabel', colId: 'colStakes', label: 'Stakes', sortBy: 'stakes', render: (v) => escapeHtml(formatStakesLimit(v)) },
   { key: 'tableCategory', colId: 'colTableCat', label: 'Table', sortBy: 'table', render: (v) => escapeHtml(formatTableCategory(v)) },
   { key: 'tableCategory', colId: 'colBomb', label: 'Bomb', align: 'center', render: (v) => (v && v.includes('bombpot') ? '<span class="bomb-icon" title="Bomb pot">💣</span>' : '') },
   { key: 'position', colId: 'colPos', label: 'Pos', sortBy: 'position', render: (v) => escapeHtml(v || '—') },
@@ -946,25 +1500,55 @@ function renderHandsRows(hands) {
     const td = document.createElement('td');
     td.colSpan = HANDS_COLUMNS.length;
     td.className = 'hands-table-empty';
-    td.textContent = 'No hands match these filters — try Reset filters, or import some under Import Hands.';
+    td.textContent = 'No hands match these filters — try Reset filters, or import some under Import/Export Hands.';
     tr.appendChild(td);
     handsTableBody.appendChild(tr);
     return;
   }
   for (const hand of hands) {
     const tr = document.createElement('tr');
-    tr.addEventListener('click', () => {
+    tr.addEventListener('click', (e) => {
+      // A click on the star toggles it in place instead of opening the hand
+      // — checked first so it never falls through to openHandWindow below.
+      const starEl = e.target.closest('[data-star-toggle]');
+      if (starEl) {
+        toggleHandStarred(hand);
+        return;
+      }
       if (hand.handId) window.weplayConverter.openHandWindow(hand.handId, externalFilters.perspectivePlayer);
     });
     for (const col of HANDS_COLUMNS) {
       const td = document.createElement('td');
       if (col.align === 'right') td.classList.add('num');
       if (col.align === 'center') td.classList.add('center');
+      if (col.key === 'starred') {
+        // The whole cell is the click target, not just the glyph inside it
+        // — see renderStarCell's own comment.
+        td.classList.add('star-cell');
+        td.dataset.starToggle = hand.handId;
+      }
       const value = hand[col.key];
-      td.innerHTML = col.render ? col.render(value) : escapeHtml(value != null ? String(value) : '—');
+      td.innerHTML = col.render ? col.render(value, hand) : escapeHtml(value != null ? String(value) : '—');
       tr.appendChild(td);
     }
     handsTableBody.appendChild(tr);
+  }
+}
+
+// Persists the flip, then re-queries the current page so the row reflects
+// the new state (and, if sorted by Starred, its new position) — a full
+// requery rather than a manual DOM patch, matching how every other mutation
+// in this app (import, restore, filter change) already just re-fetches
+// instead of hand-patching the table in place. Cheap enough at this app's
+// scale (see loadHandsPage's own precedent) to not be worth the extra
+// complexity of an optimistic local update.
+async function toggleHandStarred(hand) {
+  try {
+    await window.weplayConverter.setHandStarred(hand.handId, !hand.starred);
+    await loadHandsPage();
+  } catch (err) {
+    console.error('Failed to star/unstar hand:', err);
+    showToast('Could not save that — see the console for details.');
   }
 }
 
@@ -1045,48 +1629,145 @@ handsSortDirBtn.addEventListener('click', () => {
 
 // ── Wiring: any filter change refreshes both stats and the table ────────
 
-async function refreshEverything({ resetPage, quiet } = {}) {
-  externalFilters = currentFilters();
-  if (resetPage) tableState.offset = 0;
-  if (!quiet) setBusy(true, 'Loading…');
-  try {
-    await refreshStats();
-    await loadHandsPage();
-  } catch (err) {
-    // Never fail silently — a refresh that throws partway through is
-    // exactly how these tabs end up stuck showing stale data with no
-    // visible sign anything went wrong. Surface it instead of swallowing it.
-    console.error('Failed to refresh hands/stats:', err);
-    showToast('Something went wrong refreshing this view — try switching tabs, or reload the app.');
-  } finally {
-    if (!quiet) setBusy(false);
-  }
+// Serializes every hands/stats refresh — loadHandsAndStats() (the one-time
+// initial load) and refreshEverything() (every refresh after) — behind one
+// shared FIFO queue, so no two of them ever run their bodies concurrently.
+// Both mutate the same shared, unscoped externalFilters/tableState and the
+// same table DOM with no scoping of their own; running two at once is what
+// silently drops or overwrites the "correct" result with a stale one — the
+// loser isn't necessarily the one that started second, just whichever
+// happens to finish last.
+//
+// This has now surfaced twice under two different trigger pairs, which is
+// why it's a shared queue and not another one-off guard on a single
+// function:
+//   1. Originally: the app's very first load (loadHandsAndStats, which used
+//      to flip mainState.loaded = true before any of its own awaits had
+//      resolved) racing a Live Sync catch-up scan's push notification,
+//      which saw mainState.loaded already true and fired its own
+//      refreshEverything() while the first load was still mid-flight —
+//      "table opens empty for the wrong player, fixes itself the instant
+//      you touch the player dropdown."
+//   2. Then: clicking "Refresh Now" races ITSELF. rescanLiveSyncNow's own
+//      scan (src/liveSync.js's runScan, shared by both the regular
+//      fs.watch path and the explicit rescanNow() this button drives) always
+//      fires onChange — the normal live-sync-status push — whenever it
+//      actually finds something, in addition to replying directly to the
+//      button's own IPC call. So a single successful "Refresh Now" click
+//      produces TWO independent refreshEverything() calls (the button
+//      handler's own, plus onLiveSyncStatus's) racing each other — "new
+//      hands don't show up until I close and reopen the app," even though
+//      Live Sync had already imported them correctly; only the RENDER of
+//      that already-correct data was getting clobbered.
+let refreshQueue = Promise.resolve();
+
+function enqueueRefresh(task) {
+  const result = refreshQueue.then(task, task); // run even if the previous queued task failed
+  // The QUEUE's own continuation must never reject, or every task queued
+  // after a failed one would be skipped entirely — each task already
+  // reports its own errors (see the try/catch/finally in both tasks
+  // below), so the caller-facing `result` promise still rejects normally;
+  // only the internal chain-continuation swallows it.
+  refreshQueue = result.catch(() => {});
+  return result;
 }
 
-async function loadHandsAndStats() {
-  mainState.loaded = true;
-  // Player perspective and filters must be resolved BEFORE the first data
-  // fetch — otherwise the very first table/stats render blends every hero
-  // in the database together (only self-correcting once the user touches a
-  // filter) — exactly the multi-hero mixing the perspective selector
-  // exists to prevent in the first place.
-  await refreshPlayerOptions();
-  externalFilters = currentFilters();
-  await refreshFilterOptions();
-  initHandsTable();
-  await refreshStats();
-  await loadHandsPage();
+function refreshEverything({ resetPage, quiet } = {}) {
+  return enqueueRefresh(async () => {
+    if (resetPage) tableState.offset = 0;
+    if (!quiet) setBusy(true, 'Loading…');
+    try {
+      // Keeps the Player selector current too, not just the Stakes/Table/
+      // Position dropdowns below — without this, an opponent (or a second
+      // hero) who first appears via a Live Sync import mid-session never
+      // shows up in the dropdown at all, even though their hands are
+      // already sitting in the database and correctly counted everywhere
+      // else that queries fresh (e.g. the hand-detail seat HUD's VPIP/PFR/
+      // hands line) — exactly the "hand detail says 58 hands for this
+      // player but he's not in the list" bug this was added to fix.
+      // Preserves whatever's currently selected (see refreshPlayerOptions'
+      // own prevValue handling), so this is safe on every quiet refresh,
+      // not just explicit import/restore actions — same reasoning as
+      // refreshFilterOptions just below, generalized to this dropdown too.
+      await refreshPlayerOptions();
+      externalFilters = currentFilters();
+      // Keeps the Stakes/Table/Position dropdowns themselves current, not
+      // just the data they filter — without this, a stake that first shows
+      // up well after the app's initial load (e.g. Live Sync importing a
+      // session at a limit you hadn't played before) never appears as an
+      // option, even though hands at that stake are already sitting in the
+      // table right below it. Cheap enough (a plain DISTINCT query) to run
+      // on every refresh, including a routine tab switch, not just explicit
+      // import/restore actions.
+      await refreshFilterOptions();
+      await refreshStats();
+      await loadHandsPage();
+    } catch (err) {
+      // Never fail silently — a refresh that throws partway through is
+      // exactly how these tabs end up stuck showing stale data with no
+      // visible sign anything went wrong. Surface it instead of swallowing it.
+      console.error('Failed to refresh hands/stats:', err);
+      showToast('Something went wrong refreshing this view — try switching tabs, or reload the app.');
+    } finally {
+      if (!quiet) setBusy(false);
+    }
+  });
+}
+
+function loadHandsAndStats() {
+  return enqueueRefresh(async () => {
+    try {
+      // Player perspective and filters must be resolved BEFORE the first
+      // data fetch — otherwise the very first table/stats render blends
+      // every hero in the database together (only self-correcting once the
+      // user touches a filter) — exactly the multi-hero mixing the
+      // perspective selector exists to prevent in the first place.
+      await refreshPlayerOptions();
+      externalFilters = currentFilters();
+      await refreshFilterOptions();
+      initHandsTable();
+      await refreshStats();
+      await loadHandsPage();
+    } catch (err) {
+      // Same "never fail silently" reasoning as refreshEverything's own
+      // catch below — this one used to be missing (only a finally), so a
+      // first-load failure (e.g. the buildAdvancedTimelineChartSvg crash
+      // this was added for — see its own comment) surfaced as nothing more
+      // than a permanently-empty table and an unhandled promise rejection
+      // in the console, with no visible sign anything had gone wrong.
+      console.error('Failed to load hands/stats:', err);
+      showToast('Something went wrong loading your hands — try switching tabs, or reload the app.');
+    } finally {
+      // Only set once this — the very first queued task — actually runs,
+      // not synchronously when loadHandsAndStats() is called: a push event
+      // that arrives before its turn in the queue correctly sees "not
+      // loaded yet" and skips firing its own refreshEverything(), since
+      // this same queue will run it (via enqueueRefresh above) right after
+      // this task anyway.
+      mainState.loaded = true;
+      // Always clear the boot screen, even if something above threw — a
+      // permanent "Loading your hands…" screen because one of these calls
+      // failed would be a much worse outcome than showing the (now real, if
+      // partially empty) app underneath and letting the user see what broke.
+      bootOverlay.classList.add('hidden');
+    }
+  });
 }
 
 importDbBtn.addEventListener('click', async () => {
   setBusy(true, 'Importing to hand database…');
   try {
-    const options = { replaceHeroName: replaceHeroToggle.checked };
+    // buildHandRecords always stores each hand's raw text verbatim — real
+    // names, never Hero-replaced — regardless of this option; it only ever
+    // affects the on-demand converted text a hand-detail view or a later
+    // export might generate from that raw text. No user-facing choice to
+    // make here, so no checkbox for it (see exportReplaceHeroToggle for the
+    // one place that option now actually lives).
+    const options = { replaceHeroName: true };
     const result = await window.weplayConverter.importToHandStore(state.files, options);
     setActiveTab('hands');
     await refreshPlayerOptions();
-    await refreshFilterOptions();
-    await refreshEverything({ resetPage: true });
+    await refreshEverything({ resetPage: true }); // now includes refreshFilterOptions itself
     // Shown only after the refresh above completes, not before — a
     // success toast that appears while the UI is still stale (or about to
     // fail to refresh) is worse than no toast at all. Includes the
@@ -1110,7 +1791,15 @@ importDbBtn.addEventListener('click', async () => {
 exportBtn.addEventListener('click', async () => {
   setBusy(true, 'Exporting…');
   try {
-    const result = await window.weplayConverter.exportFilteredHands(externalFilters, exportFormat.value);
+    // Exclude Bomb Pot hands (this export's own checkbox, default checked)
+    // is a force-exclude override on top of whatever the main filter bar's
+    // Include BP toggle currently says — checked always drops bomb pots
+    // from this export regardless of what's shown in the Hands table right
+    // now; unchecked defers back to that filter's own Yes/No setting.
+    const filters = { ...externalFilters };
+    if (exportExcludeBombPotsToggle.checked) filters.includeBombPots = false;
+    const options = { replaceHeroName: exportReplaceHeroToggle.checked };
+    const result = await window.weplayConverter.exportFilteredHands(filters, exportFormat.value, options);
     if (result && result.saved) {
       const formatLabel = exportFormat.value === 'converted' ? 'CoinPoker format' : 'Weplay original format';
       showToast(`Exported ${result.count.toLocaleString()} hand${result.count === 1 ? '' : 's'} in ${formatLabel}.`);
@@ -1151,8 +1840,7 @@ restoreBtn.addEventListener('click', async () => {
       // same staleness risk applies (and mainState.loaded is already true
       // by now, so this can't rely on the first-load path to catch it).
       await refreshPlayerOptions();
-      await refreshFilterOptions();
-      await refreshEverything({ resetPage: true });
+      await refreshEverything({ resetPage: true }); // now includes refreshFilterOptions itself
       showToast(`Restored — database now has ${result.hands.toLocaleString()} hands.`);
     } else if (result && result.error) {
       showToast(result.error);
@@ -1166,14 +1854,15 @@ restoreBtn.addEventListener('click', async () => {
   }
 });
 
-for (const el of [filterPlayer, filterDateFrom, filterDateTo, filterTableCategory, filterStakes, filterPosition, filterHandCategory, filterWtsd, filterSawFlop, filterPotBbMin, filterPotBbMax]) {
+for (const el of [filterPlayer, filterDateFrom, filterDateTo, filterTableCategory, filterStakes, filterPosition, filterHandCategory, filterWtsd, filterSawFlop, filterPotBbMin, filterPotBbMax, filterIncludeBombPots, ...Object.values(advancedFilterEls)]) {
   el.addEventListener('change', () => refreshEverything({ resetPage: true }));
 }
 
-let searchDebounceTimer = null;
-filterSearch.addEventListener('input', () => {
-  clearTimeout(searchDebounceTimer);
-  searchDebounceTimer = setTimeout(() => refreshEverything({ resetPage: true }), 300);
+advancedFiltersToggle.addEventListener('click', () => {
+  const expanded = advancedFiltersToggle.getAttribute('aria-expanded') === 'true';
+  advancedFiltersToggle.setAttribute('aria-expanded', String(!expanded));
+  advancedFiltersToggle.textContent = expanded ? 'Filters ▾' : 'Filters ▴';
+  advancedFiltersPanel.classList.toggle('hidden', expanded);
 });
 
 filterResetBtn.addEventListener('click', () => {
@@ -1187,7 +1876,8 @@ filterResetBtn.addEventListener('click', () => {
   filterSawFlop.value = '';
   filterPotBbMin.value = '';
   filterPotBbMax.value = '';
-  filterSearch.value = '';
+  filterIncludeBombPots.value = 'yes';
+  for (const el of Object.values(advancedFilterEls)) el.value = '';
   // Player perspective is deliberately NOT reset — clearing it would blend
   // multiple heroes' results together if more than one exists in the
   // database, which is never what "reset filters" should silently do.
