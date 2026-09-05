@@ -1784,27 +1784,37 @@ test('handTimeline: one entry per hand (not per date), sorted chronologically, w
   assert.strictEqual(stats.handTimeline[2].cumulativeEV, 8);
 });
 
-test('aggregateStats: per-street aggression matches PokerTracker\'s documented AFq formula — (bets+raises) / (bets+raises+calls+folds), checks EXCLUDED — verified against a hand-computable example, not just plausibility', () => {
+test('aggregateStats: per-street Agg% (PT) matches PokerTracker 4\'s own per-street report — (bets+raises) / (bets+raises+calls+checks), FOLDS excluded — verified against a hand-computable example, not just plausibility', () => {
   const base = { bb: 1, vpip: true, pfr: true, threeBet: false, facedThreeBetOpportunity: false, foldedToThreeBet: false, hadThreeBetOpportunityAfterOpening: false, sawFlop: true, wonAtShowdown: false, wonWhenSawFlop: false, postflopAggressive: 0, postflopCalls: 0, isBombPot: false, position: 'BTN', net: 0 };
   const emptyStreet = { agg: 0, calls: 0, folds: 0, checks: 0 };
+  const streetHand = (flop) => ({ ...base, streetAgg: { FLOP: flop, TURN: emptyStreet, RIVER: emptyStreet } });
   const hands = [
-    { ...base, streetAgg: { FLOP: { agg: 1, calls: 0, folds: 0, checks: 0 }, TURN: emptyStreet, RIVER: emptyStreet } }, // flop bet
-    { ...base, streetAgg: { FLOP: { agg: 1, calls: 0, folds: 0, checks: 0 }, TURN: emptyStreet, RIVER: emptyStreet } }, // flop raise (bets and raises both count toward "agg")
-    { ...base, streetAgg: { FLOP: { agg: 0, calls: 1, folds: 0, checks: 0 }, TURN: emptyStreet, RIVER: emptyStreet } }, // flop call
-    { ...base, streetAgg: { FLOP: { agg: 0, calls: 0, folds: 1, checks: 0 }, TURN: emptyStreet, RIVER: emptyStreet } }, // flop fold
-    // AFq excludes checks from the denominator entirely — this hand's flop
-    // check must NOT move flopAggression or flopAggressionOpportunities.
-    { ...base, streetAgg: { FLOP: { agg: 0, calls: 0, folds: 0, checks: 1 }, TURN: emptyStreet, RIVER: emptyStreet } }, // flop check
+    streetHand({ agg: 1, calls: 0, folds: 0, checks: 0 }), // flop bet
+    streetHand({ agg: 1, calls: 0, folds: 0, checks: 0 }), // flop raise (bets and raises both count toward "agg")
+    streetHand({ agg: 1, calls: 0, folds: 0, checks: 0 }), // flop bet
+    streetHand({ agg: 0, calls: 1, folds: 0, checks: 0 }), // flop call
+    streetHand({ agg: 0, calls: 0, folds: 1, checks: 0 }), // flop fold
+    streetHand({ agg: 0, calls: 0, folds: 1, checks: 0 }), // flop fold
+    // Deliberately 2 folds and 2 checks (not equal counts of each, and not
+    // matching either count above) — this is what actually discriminates
+    // the corrected formula from the old one; a fixture where folds and
+    // checks happen to tie would pass under either formula and prove
+    // nothing.
+    streetHand({ agg: 0, calls: 0, folds: 0, checks: 1 }), // flop check
+    streetHand({ agg: 0, calls: 0, folds: 0, checks: 1 }), // flop check
   ];
   const stats = aggregateStats(hands);
-  // agg=2, calls=1, folds=1 -> 2 / (2+1+1) = 50%, over 4 opportunities —
-  // the check is tracked on the hand but excluded from this ratio.
+  // agg=3, calls=1, checks=2, folds excluded -> 3 / (3+1+2) = 50%, over 6
+  // opportunities — the two folds are tracked on the hands but excluded
+  // from this ratio, matching PokerTracker 4's own per-street "F/T/R Agg%"
+  // convention (see streetAggPct's comment in src/stats.js for the real
+  // PokerTracker report this was checked against).
   assert.strictEqual(stats.flopAggression, 50);
-  assert.strictEqual(stats.flopAggressionOpportunities, 4);
-  // Agg% (DriveHUD's convention): same agg=2, but the check now counts
-  // toward the denominator -> 2 / (2+1+1+1) = 40%, over 5 opportunities.
-  assert.strictEqual(stats.flopAggPct, 40);
-  assert.strictEqual(stats.flopAggPctOpportunities, 5);
+  assert.strictEqual(stats.flopAggressionOpportunities, 6);
+  // Agg% (DriveHUD's convention): same agg=3, but now BOTH folds and checks
+  // count toward the denominator -> 3 / (3+1+2+2) = 37.5%, over 8 opportunities.
+  assert.strictEqual(stats.flopAggPct, 37.5);
+  assert.strictEqual(stats.flopAggPctOpportunities, 8);
   // Turn/river had zero opportunities anywhere in this fixture.
   assert.strictEqual(stats.turnAggression, null);
   assert.strictEqual(stats.turnAggressionOpportunities, 0);
@@ -1812,7 +1822,7 @@ test('aggregateStats: per-street aggression matches PokerTracker\'s documented A
   assert.strictEqual(stats.turnAggPctOpportunities, 0);
 });
 
-test('analyzeHand: streetAgg is correctly populated from real hand text — a flop check is tracked in the raw counts even though AFq excludes it from the aggregation denominator', () => {
+test('analyzeHand: streetAgg is correctly populated from real hand text — a flop check is tracked in the raw counts (aggregateStats decides which aggression formula counts it, not analyzeHand)', () => {
   const hand = `Weplay Hand #900:  Hold'em No Limit ($0.25/$0.50) - 2026/07/05 18:00:00 UTC
 Table 'Test'(111) 6-max Seat #1 is the button
 Seat 1: PlayerA ($50 in chips)

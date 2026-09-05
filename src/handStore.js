@@ -162,6 +162,29 @@ function buildHandRecords(rawBlock, sourceFile, options) {
       facedThreeBetOpportunity: b(playerStats && playerStats.facedThreeBetOpportunity),
       postflopAggCount,
       postflopAggDenom,
+      // Live-HUD opportunity denominators — see src/db.js's hand_players
+      // comment. Every field read here already exists on analyzeHand's
+      // return object (src/stats.js); this is pure persistence, not new
+      // analysis, the same shape as the advanced-filters flags above.
+      rfiOpportunity: b(playerStats && playerStats.rfiOpportunity),
+      coldCallOpportunity: b(playerStats && playerStats.coldCallOpportunity),
+      hadThreeBetOpportunityAfterOpening: b(playerStats && playerStats.hadThreeBetOpportunityAfterOpening),
+      facedFourBetOpportunity: b(playerStats && playerStats.facedFourBetOpportunity),
+      squeezeOpportunity: b(playerStats && playerStats.squeezeOpportunity),
+      stealOpportunity: b(playerStats && playerStats.stealOpportunity),
+      stealDefenseOpportunity: b(playerStats && playerStats.stealDefenseOpportunity),
+      cbetOpportunityFlop: b(playerStats && playerStats.cbetOpportunity && playerStats.cbetOpportunity.FLOP),
+      cbetOpportunityTurn: b(playerStats && playerStats.cbetOpportunity && playerStats.cbetOpportunity.TURN),
+      cbetOpportunityRiver: b(playerStats && playerStats.cbetOpportunity && playerStats.cbetOpportunity.RIVER),
+      facedCbetOpportunityFlop: b(playerStats && playerStats.facedCBetOpportunity && playerStats.facedCBetOpportunity.FLOP),
+      facedCbetOpportunityTurn: b(playerStats && playerStats.facedCBetOpportunity && playerStats.facedCBetOpportunity.TURN),
+      facedCbetOpportunityRiver: b(playerStats && playerStats.facedCBetOpportunity && playerStats.facedCBetOpportunity.RIVER),
+      // Not booleanized like the flags above — checkRaiseByStreet[street].opp
+      // is a real per-hand count (see its own comment in stats.js), summed
+      // directly by getLiveHudStats rather than filtered/counted.
+      checkRaiseOpportunityFlop: playerStats && playerStats.checkRaiseByStreet ? playerStats.checkRaiseByStreet.FLOP.opp : null,
+      checkRaiseOpportunityTurn: playerStats && playerStats.checkRaiseByStreet ? playerStats.checkRaiseByStreet.TURN.opp : null,
+      checkRaiseOpportunityRiver: playerStats && playerStats.checkRaiseByStreet ? playerStats.checkRaiseByStreet.RIVER.opp : null,
     };
   });
 
@@ -255,8 +278,14 @@ const UPSERT_PLAYER_SQL = `
      folded_to_cbet_flop, folded_to_cbet_turn, folded_to_cbet_river,
      check_raise_flop, check_raise_turn, check_raise_river,
      won_at_showdown, won_when_saw_flop,
-     faced_three_bet_opportunity, postflop_agg_count, postflop_agg_denom)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     faced_three_bet_opportunity, postflop_agg_count, postflop_agg_denom,
+     rfi_opportunity, cold_call_opportunity, had_three_bet_opportunity_after_opening,
+     faced_four_bet_opportunity, squeeze_opportunity, steal_opportunity, steal_defense_opportunity,
+     cbet_opportunity_flop, cbet_opportunity_turn, cbet_opportunity_river,
+     faced_cbet_opportunity_flop, faced_cbet_opportunity_turn, faced_cbet_opportunity_river,
+     check_raise_opportunity_flop, check_raise_opportunity_turn, check_raise_opportunity_river)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(hand_id, player_name) DO UPDATE SET
     is_hero              = MAX(hand_players.is_hero, excluded.is_hero),
     seat                 = COALESCE(excluded.seat, hand_players.seat),
@@ -298,7 +327,25 @@ const UPSERT_PLAYER_SQL = `
     won_when_saw_flop    = COALESCE(excluded.won_when_saw_flop, hand_players.won_when_saw_flop),
     faced_three_bet_opportunity = COALESCE(excluded.faced_three_bet_opportunity, hand_players.faced_three_bet_opportunity),
     postflop_agg_count   = COALESCE(excluded.postflop_agg_count, hand_players.postflop_agg_count),
-    postflop_agg_denom   = COALESCE(excluded.postflop_agg_denom, hand_players.postflop_agg_denom)
+    postflop_agg_denom   = COALESCE(excluded.postflop_agg_denom, hand_players.postflop_agg_denom),
+    -- Live-HUD opportunity denominators: same COALESCE(new, old) tiebreak
+    -- as every other deterministic-from-public-data column above.
+    rfi_opportunity      = COALESCE(excluded.rfi_opportunity, hand_players.rfi_opportunity),
+    cold_call_opportunity = COALESCE(excluded.cold_call_opportunity, hand_players.cold_call_opportunity),
+    had_three_bet_opportunity_after_opening = COALESCE(excluded.had_three_bet_opportunity_after_opening, hand_players.had_three_bet_opportunity_after_opening),
+    faced_four_bet_opportunity = COALESCE(excluded.faced_four_bet_opportunity, hand_players.faced_four_bet_opportunity),
+    squeeze_opportunity  = COALESCE(excluded.squeeze_opportunity, hand_players.squeeze_opportunity),
+    steal_opportunity    = COALESCE(excluded.steal_opportunity, hand_players.steal_opportunity),
+    steal_defense_opportunity = COALESCE(excluded.steal_defense_opportunity, hand_players.steal_defense_opportunity),
+    cbet_opportunity_flop = COALESCE(excluded.cbet_opportunity_flop, hand_players.cbet_opportunity_flop),
+    cbet_opportunity_turn = COALESCE(excluded.cbet_opportunity_turn, hand_players.cbet_opportunity_turn),
+    cbet_opportunity_river = COALESCE(excluded.cbet_opportunity_river, hand_players.cbet_opportunity_river),
+    faced_cbet_opportunity_flop = COALESCE(excluded.faced_cbet_opportunity_flop, hand_players.faced_cbet_opportunity_flop),
+    faced_cbet_opportunity_turn = COALESCE(excluded.faced_cbet_opportunity_turn, hand_players.faced_cbet_opportunity_turn),
+    faced_cbet_opportunity_river = COALESCE(excluded.faced_cbet_opportunity_river, hand_players.faced_cbet_opportunity_river),
+    check_raise_opportunity_flop = COALESCE(excluded.check_raise_opportunity_flop, hand_players.check_raise_opportunity_flop),
+    check_raise_opportunity_turn = COALESCE(excluded.check_raise_opportunity_turn, hand_players.check_raise_opportunity_turn),
+    check_raise_opportunity_river = COALESCE(excluded.check_raise_opportunity_river, hand_players.check_raise_opportunity_river)
 `;
 
 /**
@@ -351,6 +398,11 @@ function importFileIntoStore(db, rawText, sourceFile, options, splitHandsFn) {
           p.checkRaiseFlop, p.checkRaiseTurn, p.checkRaiseRiver,
           p.wonAtShowdown, p.wonWhenSawFlop,
           p.facedThreeBetOpportunity, p.postflopAggCount, p.postflopAggDenom,
+          p.rfiOpportunity, p.coldCallOpportunity, p.hadThreeBetOpportunityAfterOpening,
+          p.facedFourBetOpportunity, p.squeezeOpportunity, p.stealOpportunity, p.stealDefenseOpportunity,
+          p.cbetOpportunityFlop, p.cbetOpportunityTurn, p.cbetOpportunityRiver,
+          p.facedCbetOpportunityFlop, p.facedCbetOpportunityTurn, p.facedCbetOpportunityRiver,
+          p.checkRaiseOpportunityFlop, p.checkRaiseOpportunityTurn, p.checkRaiseOpportunityRiver,
         );
       }
     }
@@ -629,7 +681,8 @@ function backfillDeepStats(db, analyzeHandFn) {
   const rows = db.prepare(`
     SELECT hp.hand_id AS handId, hp.player_name AS playerName, h.raw_text AS rawText
     FROM hand_players hp JOIN hands h ON h.hand_id = hp.hand_id
-    WHERE (hp.net IS NULL OR hp.saw_flop IS NULL OR hp.rfi IS NULL OR hp.postflop_agg_count IS NULL) AND h.skipped = 0
+    WHERE (hp.net IS NULL OR hp.saw_flop IS NULL OR hp.rfi IS NULL OR hp.postflop_agg_count IS NULL
+           OR hp.rfi_opportunity IS NULL) AND h.skipped = 0
   `).all();
   if (rows.length === 0) return 0;
 
@@ -642,7 +695,12 @@ function backfillDeepStats(db, analyzeHandFn) {
       folded_to_cbet_flop = ?, folded_to_cbet_turn = ?, folded_to_cbet_river = ?,
       check_raise_flop = ?, check_raise_turn = ?, check_raise_river = ?,
       won_at_showdown = ?, won_when_saw_flop = ?,
-      faced_three_bet_opportunity = ?, postflop_agg_count = ?, postflop_agg_denom = ?
+      faced_three_bet_opportunity = ?, postflop_agg_count = ?, postflop_agg_denom = ?,
+      rfi_opportunity = ?, cold_call_opportunity = ?, had_three_bet_opportunity_after_opening = ?,
+      faced_four_bet_opportunity = ?, squeeze_opportunity = ?, steal_opportunity = ?, steal_defense_opportunity = ?,
+      cbet_opportunity_flop = ?, cbet_opportunity_turn = ?, cbet_opportunity_river = ?,
+      faced_cbet_opportunity_flop = ?, faced_cbet_opportunity_turn = ?, faced_cbet_opportunity_river = ?,
+      check_raise_opportunity_flop = ?, check_raise_opportunity_turn = ?, check_raise_opportunity_river = ?
     WHERE hand_id = ? AND player_name = ?
   `);
   db.exec('BEGIN');
@@ -689,6 +747,22 @@ function backfillDeepStats(db, analyzeHandFn) {
         analyzed && analyzed.streetAgg
           ? ['FLOP', 'TURN', 'RIVER'].reduce((s, k) => s + analyzed.streetAgg[k].agg + analyzed.streetAgg[k].calls + analyzed.streetAgg[k].folds + analyzed.streetAgg[k].checks, 0)
           : null,
+        b(analyzed && analyzed.rfiOpportunity),
+        b(analyzed && analyzed.coldCallOpportunity),
+        b(analyzed && analyzed.hadThreeBetOpportunityAfterOpening),
+        b(analyzed && analyzed.facedFourBetOpportunity),
+        b(analyzed && analyzed.squeezeOpportunity),
+        b(analyzed && analyzed.stealOpportunity),
+        b(analyzed && analyzed.stealDefenseOpportunity),
+        b(analyzed && analyzed.cbetOpportunity && analyzed.cbetOpportunity.FLOP),
+        b(analyzed && analyzed.cbetOpportunity && analyzed.cbetOpportunity.TURN),
+        b(analyzed && analyzed.cbetOpportunity && analyzed.cbetOpportunity.RIVER),
+        b(analyzed && analyzed.facedCBetOpportunity && analyzed.facedCBetOpportunity.FLOP),
+        b(analyzed && analyzed.facedCBetOpportunity && analyzed.facedCBetOpportunity.TURN),
+        b(analyzed && analyzed.facedCBetOpportunity && analyzed.facedCBetOpportunity.RIVER),
+        analyzed && analyzed.checkRaiseByStreet ? analyzed.checkRaiseByStreet.FLOP.opp : null,
+        analyzed && analyzed.checkRaiseByStreet ? analyzed.checkRaiseByStreet.TURN.opp : null,
+        analyzed && analyzed.checkRaiseByStreet ? analyzed.checkRaiseByStreet.RIVER.opp : null,
         r.handId, r.playerName,
       );
     }
@@ -837,6 +911,103 @@ function getQuickPlayerStats(db, playerNames) {
   return result;
 }
 
+// Every stat below that's scoped to non-bomb-pot hands only — VPIP, PFR,
+// Limp%, 3-Bet%, Fold to 3-Bet, 4-Bet%, Squeeze%, RFI%, ATS, Fold to Steal,
+// WTSD%, W$SD%, WWSF% — matches aggregateStats' own `nonBomb` convention in
+// src/stats.js (a bomb pot has no preflop betting round at all, and forces
+// every seated player to see the flop together regardless of hand
+// strength). Agg%, C-Bet%, Fold to C-Bet%, and Check-Raise% deliberately
+// stay on ALL hands including bomb pots, matching stats.js's own comment on
+// streetAggPct/cbetPct: postflop aggression carrying into a bomb-pot hand
+// is a real, well-defined question even though that hand had no preflop
+// round. Reusing getQuickPlayerStats' player_name IN (...) + skipped = 0
+// query shape, just wider — see that function's own comment for why a raw
+// SQL aggregate over hand_players is the right tool here instead of
+// aggregateStats/analyzeHand (this runs once per table refresh across up to
+// six tables' worth of opponents; re-parsing raw text per opponent on every
+// live refresh would not keep up).
+const NONBOMB = "CASE WHEN h.table_type != 'bombpot' THEN 1 ELSE 0 END";
+
+function getLiveHudStats(db, playerNames) {
+  const names = [...new Set((playerNames || []).filter(Boolean))];
+  if (names.length === 0) return {};
+  const placeholders = names.map(() => '?').join(', ');
+  const nb = (col) => `SUM(${NONBOMB} * hp.${col})`;
+  const rows = db.prepare(`
+    SELECT hp.player_name AS name,
+      COUNT(*) AS hands,
+      SUM(${NONBOMB}) AS nonBombHands,
+      ${nb('vpip')} AS vpipCount,
+      ${nb('pfr')} AS pfrCount,
+      ${nb('limped')} AS limpCount,
+      ${nb('three_bet')} AS threeBetCount,
+      ${nb('faced_three_bet_opportunity')} AS threeBetOppCount,
+      ${nb('folded_to_three_bet')} AS foldToThreeBetCount,
+      ${nb('had_three_bet_opportunity_after_opening')} AS foldToThreeBetOppCount,
+      ${nb('four_bet')} AS fourBetCount,
+      ${nb('faced_four_bet_opportunity')} AS fourBetOppCount,
+      ${nb('squeeze')} AS squeezeCount,
+      ${nb('squeeze_opportunity')} AS squeezeOppCount,
+      ${nb('rfi')} AS rfiCount,
+      ${nb('rfi_opportunity')} AS rfiOppCount,
+      ${nb('attempt_steal')} AS stealCount,
+      ${nb('steal_opportunity')} AS stealOppCount,
+      ${nb('folded_to_steal')} AS foldToStealCount,
+      ${nb('steal_defense_opportunity')} AS foldToStealOppCount,
+      SUM(${NONBOMB} * hp.saw_flop) AS sawFlopNonBombCount,
+      SUM(CASE WHEN h.table_type != 'bombpot' AND hp.saw_flop = 1 THEN hp.went_to_showdown ELSE 0 END) AS wtsdCount,
+      ${nb('won_at_showdown')} AS wonAtShowdownCount,
+      SUM(CASE WHEN h.table_type != 'bombpot' AND hp.saw_flop = 1 THEN hp.won_when_saw_flop ELSE 0 END) AS wwsfCount,
+      SUM(hp.postflop_agg_count) AS aggCount,
+      SUM(hp.postflop_agg_denom) AS aggDenom,
+      SUM(hp.cbet_flop) AS cbetFlopCount, SUM(hp.cbet_opportunity_flop) AS cbetFlopOppCount,
+      SUM(hp.cbet_turn) AS cbetTurnCount, SUM(hp.cbet_opportunity_turn) AS cbetTurnOppCount,
+      SUM(hp.cbet_river) AS cbetRiverCount, SUM(hp.cbet_opportunity_river) AS cbetRiverOppCount,
+      SUM(hp.folded_to_cbet_flop) AS foldToCbetFlopCount, SUM(hp.faced_cbet_opportunity_flop) AS foldToCbetFlopOppCount,
+      SUM(hp.folded_to_cbet_turn) AS foldToCbetTurnCount, SUM(hp.faced_cbet_opportunity_turn) AS foldToCbetTurnOppCount,
+      SUM(hp.folded_to_cbet_river) AS foldToCbetRiverCount, SUM(hp.faced_cbet_opportunity_river) AS foldToCbetRiverOppCount,
+      SUM(hp.check_raise_flop) AS checkRaiseFlopCount, SUM(hp.check_raise_opportunity_flop) AS checkRaiseFlopOppCount,
+      SUM(hp.check_raise_turn) AS checkRaiseTurnCount, SUM(hp.check_raise_opportunity_turn) AS checkRaiseTurnOppCount,
+      SUM(hp.check_raise_river) AS checkRaiseRiverCount, SUM(hp.check_raise_opportunity_river) AS checkRaiseRiverOppCount
+    FROM hand_players hp
+    JOIN hands h ON h.hand_id = hp.hand_id
+    WHERE hp.player_name IN (${placeholders}) AND h.skipped = 0
+    GROUP BY hp.player_name
+  `).all(...names);
+
+  const pct = (num, denom) => (denom ? Math.round((num / denom) * 100) : null);
+  const result = {};
+  for (const r of rows) {
+    result[r.name] = {
+      hands: r.hands,
+      vpip: pct(r.vpipCount, r.nonBombHands),
+      pfr: pct(r.pfrCount, r.nonBombHands),
+      limp: pct(r.limpCount, r.nonBombHands),
+      threeBet: pct(r.threeBetCount, r.threeBetOppCount),
+      foldToThreeBet: pct(r.foldToThreeBetCount, r.foldToThreeBetOppCount),
+      fourBet: pct(r.fourBetCount, r.fourBetOppCount),
+      squeeze: pct(r.squeezeCount, r.squeezeOppCount),
+      rfi: pct(r.rfiCount, r.rfiOppCount),
+      attemptSteal: pct(r.stealCount, r.stealOppCount),
+      foldToSteal: pct(r.foldToStealCount, r.foldToStealOppCount),
+      aggPct: pct(r.aggCount, r.aggDenom),
+      wtsd: pct(r.wtsdCount, r.sawFlopNonBombCount),
+      wonAtShowdown: pct(r.wonAtShowdownCount, r.wtsdCount),
+      wonWhenSawFlop: pct(r.wwsfCount, r.sawFlopNonBombCount),
+      cbetFlop: pct(r.cbetFlopCount, r.cbetFlopOppCount),
+      cbetTurn: pct(r.cbetTurnCount, r.cbetTurnOppCount),
+      cbetRiver: pct(r.cbetRiverCount, r.cbetRiverOppCount),
+      foldToCbetFlop: pct(r.foldToCbetFlopCount, r.foldToCbetFlopOppCount),
+      foldToCbetTurn: pct(r.foldToCbetTurnCount, r.foldToCbetTurnOppCount),
+      foldToCbetRiver: pct(r.foldToCbetRiverCount, r.foldToCbetRiverOppCount),
+      checkRaiseFlop: pct(r.checkRaiseFlopCount, r.checkRaiseFlopOppCount),
+      checkRaiseTurn: pct(r.checkRaiseTurnCount, r.checkRaiseTurnOppCount),
+      checkRaiseRiver: pct(r.checkRaiseRiverCount, r.checkRaiseRiverOppCount),
+    };
+  }
+  return result;
+}
+
 /**
  * Fetches one full hand by ID — hand-level fields plus a specific player's
  * row (their position, cards if known, net, etc) — for the detail
@@ -896,5 +1067,6 @@ module.exports = {
   buildHandRecords, getConvertedText, importFileIntoStore, queryHands, getDistinctValues,
   queryRawHandsForStats, getHandById, getHeroPlayerNames, getAllPlayerNames,
   getTotalHandCount, backfillDeepStats, backfillEVAdjustments, getQuickPlayerStats,
+  getLiveHudStats,
   setHandStarred,
 };

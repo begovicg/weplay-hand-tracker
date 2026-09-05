@@ -20,6 +20,9 @@ const liveSyncChooseFolderBtn = document.getElementById('liveSyncChooseFolderBtn
 const liveSyncToggleBtn = document.getElementById('liveSyncToggleBtn');
 const liveSyncRefreshNowBtn = document.getElementById('liveSyncRefreshNowBtn');
 const liveSyncStatusText = document.getElementById('liveSyncStatusText');
+const hudOverlayStatusBadge = document.getElementById('hudOverlayStatusBadge');
+const hudOverlayToggleBtn = document.getElementById('hudOverlayToggleBtn');
+const hudOverlayStatusText = document.getElementById('hudOverlayStatusText');
 const exportCountLabel = document.getElementById('exportCountLabel');
 const exportFormat = document.getElementById('exportFormat');
 const exportReplaceHeroToggle = document.getElementById('exportReplaceHeroToggle');
@@ -329,6 +332,45 @@ window.weplayConverter.getLiveSyncState().then((liveSyncState) => {
   liveSyncToggleBtn.disabled = !liveSyncState.folderPath;
   setLiveSyncBadge(liveSyncState.running);
 });
+
+// ── Table HUD ──────────────────────────────────────────────────────────
+// Same on/off shape as Live Sync above, but there's no folder to pick — it
+// reads the same live hand-history files Live Sync is already watching
+// (see main.js's 'start-hud-overlay' handler), so the only control here is
+// the toggle itself.
+function setHudOverlayBadge(running) {
+  hudOverlayStatusBadge.textContent = running ? 'On' : 'Off';
+  hudOverlayStatusBadge.classList.toggle('live-sync-on', running);
+  hudOverlayStatusBadge.classList.toggle('live-sync-off', !running);
+  hudOverlayToggleBtn.textContent = running ? 'Stop Table HUD' : 'Start Table HUD';
+}
+
+hudOverlayToggleBtn.addEventListener('click', async () => {
+  const running = hudOverlayStatusBadge.classList.contains('live-sync-on');
+  hudOverlayToggleBtn.disabled = true;
+  try {
+    if (running) {
+      await window.weplayConverter.stopHudOverlay();
+      setHudOverlayBadge(false);
+      hudOverlayStatusText.textContent = 'Stopped.';
+    } else {
+      const result = await window.weplayConverter.startHudOverlay();
+      if (result.error) {
+        showToast(result.error);
+      } else {
+        setHudOverlayBadge(true);
+        hudOverlayStatusText.textContent = 'Watching for open tables…';
+      }
+    }
+  } catch (err) {
+    console.error('Table HUD toggle failed:', err);
+    showToast('Something went wrong — see the console for details.');
+  } finally {
+    hudOverlayToggleBtn.disabled = false;
+  }
+});
+
+window.weplayConverter.getHudOverlayState().then((hudState) => setHudOverlayBadge(hudState.running));
 
 function buildSupportReport(fileName, hand) {
   const lines = [];
@@ -975,7 +1017,7 @@ function renderStats(payload) {
     caveatParts.push(`${excludedCount} hand(s) were excluded entirely — no cards could be attributed to a player, or the hand had no resolution anywhere in the source (a real Weplay data gap, e.g. a disconnect at showdown that was never resolved).`);
   }
   caveatParts.push('WTSD only counts a genuine multi-way contest (2+ players still active when the showdown is reached) — Weplay shows the same header text even for an uncontested fold-out, which is excluded here.');
-  caveatParts.push('AFq and Agg% measure the exact same bets/raises on each street, just over a different denominator — AFq (PokerTracker\'s convention) counts only bets, raises, calls, and folds, while Agg% (DriveHUD\'s convention) also counts checks. Checking is common, so Agg%\'s denominator — and therefore its percentage — is usually much lower than AFq\'s for the same underlying hands; neither one is "more correct," they\'re just answering slightly different questions.');
+  caveatParts.push('Agg% (PT) and Agg% (DriveHUD) measure the exact same bets/raises on each street, just over a different denominator — Agg% (PT) counts bets, raises, calls, and checks (folds excluded), matching PokerTracker 4\'s own per-street report when checked against this app\'s converted export; Agg% (DriveHUD) also counts folds, so its denominator — and therefore its percentage — is usually a bit lower than PT\'s for the same underlying hands. Neither is "more correct," they\'re just answering slightly different questions — Aggression Factor above uses a third convention again (bets+raises over calls only, no denominator opportunities at all).');
   caveatParts.push('EV Winrate only adjusts genuine 2-player all-in-with-cards-to-come hands (both hands shown at showdown) — multi-way all-ins keep their actual result for now, since that needs separate per-opponent side-pot equity math. Equity is computed exactly for turn/river all-ins, and via Monte Carlo sampling (10,000 trials, ~0.4 percentage points of statistical noise) for preflop/flop all-ins, where exact enumeration would mean up to ~1.7 million board combinations per hand.');
   statsCaveat.textContent = caveatParts.join(' ');
 }
@@ -1073,18 +1115,20 @@ function renderHudTable(stats) {
     title: 'Aggression & Showdown',
     rows: [
       hudRow('Aggression Factor', stats.aggressionFactor != null ? stats.aggressionFactor.toFixed(2) : '—', null, 'neutral'),
-      // AFq (PokerTracker's convention: checks excluded from the
-      // denominator) grouped together, then Agg% (DriveHUD's convention:
-      // checks included) grouped together — same underlying actions, two
-      // different denominators. See the caveat text below the graph for
-      // the full explanation, and streetAggPct in src/stats.js for why
-      // both are shown rather than picking one.
-      hudRow('Flop AFq', fmtPct(stats.flopAggression), stats.flopAggressionOpportunities, 'pos'),
-      hudRow('Turn AFq', fmtPct(stats.turnAggression), stats.turnAggressionOpportunities, 'pos'),
-      hudRow('River AFq', fmtPct(stats.riverAggression), stats.riverAggressionOpportunities, 'pos'),
-      hudRow('Flop Agg%', fmtPct(stats.flopAggPct), stats.flopAggPctOpportunities, 'pos'),
-      hudRow('Turn Agg%', fmtPct(stats.turnAggPct), stats.turnAggPctOpportunities, 'pos'),
-      hudRow('River Agg%', fmtPct(stats.riverAggPct), stats.riverAggPctOpportunities, 'pos'),
+      // PT Agg% (verified against a real PokerTracker 4 report generated
+      // from this app's own converted export — folds excluded from the
+      // denominator, checks included) grouped together, then Agg% (DriveHUD's
+      // convention: both folds AND checks included) grouped together — same
+      // underlying actions, two different denominators. See the caveat text
+      // below the graph for the full explanation, and streetAggPct in
+      // src/stats.js for the PokerTracker verification this was checked
+      // against.
+      hudRow('Flop Agg% (PT)', fmtPct(stats.flopAggression), stats.flopAggressionOpportunities, 'pos'),
+      hudRow('Turn Agg% (PT)', fmtPct(stats.turnAggression), stats.turnAggressionOpportunities, 'pos'),
+      hudRow('River Agg% (PT)', fmtPct(stats.riverAggression), stats.riverAggressionOpportunities, 'pos'),
+      hudRow('Flop Agg% (DriveHUD)', fmtPct(stats.flopAggPct), stats.flopAggPctOpportunities, 'pos'),
+      hudRow('Turn Agg% (DriveHUD)', fmtPct(stats.turnAggPct), stats.turnAggPctOpportunities, 'pos'),
+      hudRow('River Agg% (DriveHUD)', fmtPct(stats.riverAggPct), stats.riverAggPctOpportunities, 'pos'),
       hudRow('WTSD', fmtPct(stats.wtsd), null, 'neutral'),
       hudRow('W$SD', fmtPct(stats.wonAtShowdown), null, 'neutral'),
       hudRow('W$WSF', fmtPct(stats.wonWhenSawFlop), null, 'neutral'),

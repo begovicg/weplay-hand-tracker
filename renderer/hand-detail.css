@@ -134,6 +134,15 @@
   font-weight: 700;
 }
 
+/* A rival who saw the flop — same orange family as the hero highlight
+   above, just a much fainter tint, so the two read as "highlighted, with
+   different intensity" rather than two unrelated colors. Never applied
+   for a bomb pot (see hand-detail.js's namesFoldedBeforeFlop) or hero's own
+   row (already covered by .hero above). */
+.hd-player-row.saw-postflop {
+  background: rgba(255, 122, 26, 0.055);
+}
+
 .hd-col-pos {
   color: var(--text-faint);
   font-weight: 700;

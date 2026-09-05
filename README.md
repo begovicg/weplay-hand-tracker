@@ -194,30 +194,49 @@ yet (a deliberately deferred "Phase 3").
 
 A few things worth knowing about how these numbers are computed:
 
-- **Flop/Turn/River Aggression uses Aggression Frequency (AFq),
-  PokerTracker's documented definition** — `(bets + raises) / (bets +
-  raises + calls + folds) × 100`, per street, with checks EXCLUDED from
-  the denominator. Worth being explicit about, since "aggression" isn't
-  one standard number across poker software. This app briefly switched
-  to DriveHUD's "Agg%" (checks included) after an investigation into why
-  reported numbers looked flatteringly high — the actual raw counts were
-  pulled and two real hands were traced by hand against the raw text
-  (both matched exactly — no bug), which pointed at the real cause:
-  AFq's excluded-checks denominator is substantially narrower than the
-  numbers a player naturally expects, since checking is the single most
-  common postflop action (on this project's own real data: 40.5% AFq
-  vs. roughly 26% if measured against every flop seen instead — a
-  genuine, large, structural gap purely from the definition). That
-  investigation was real, but AFq is what's shown now — reverted back
-  per explicit instruction, since it's the most consistently,
-  repeatedly documented formula across independent sources
-  (PokerTracker's own forum, Upswing Poker, poker terminology
-  glossaries, community discussion): the dominant industry convention,
-  not a fringe one. This app's existing Aggression Factor (a ratio,
-  bets+raises over calls, folds and checks all excluded) is a genuinely
-  different question — how aggressive vs. passive a player's postflop
-  volume is — not a per-street breakdown of it, and the two aren't
-  meant to be directly compared.
+- **Flop/Turn/River Aggression ("Agg% (PT)") is verified against a real
+  PokerTracker 4 report, not just a documented definition** — `(bets +
+  raises) / (bets + raises + calls + checks) × 100`, per street, with
+  FOLDS excluded from the denominator. This has been through two rounds:
+  it briefly switched to DriveHUD's "Agg%" (checks included, folds also
+  included) after an investigation into why reported numbers looked
+  flatteringly high, then got reverted back to the textbook AFq
+  definition (`bets+raises over bets+raises+calls+folds`, checks
+  excluded) per explicit instruction, since AFq is the most consistently
+  documented formula across independent sources (PokerTracker's own
+  forum, Upswing Poker, poker terminology glossaries) — the dominant
+  industry convention, not a fringe one. That reasoning held right up
+  until the user ran this app's own CoinPoker-converted export through
+  real PokerTracker 4 and compared its actual generated report against
+  this app's numbers: PT4's own per-street columns (labeled "HM F/T/R
+  Agg%" in its CSV export — it borrows Hold'em Manager's convention
+  specifically for this breakdown, not its own native AFq) do NOT use
+  the textbook AFq formula at all. Checked against two real months of
+  that report: once a month's hand count actually lined up between the
+  two databases (July 2026, off by only ~1.3%), the folds-excluded/
+  checks-included formula matched PokerTracker's reported 25.7/32.5/32.5
+  within ~1.5 points on every street, while textbook AFq was off by
+  roughly 15 points per street on the same hands. PokerTracker's own
+  AGGREGATE stat is a different story — this app's textbook-AFq counts,
+  summed across all three streets, matched PokerTracker's reported
+  "Total AFq" almost exactly (45.2% vs. 45.27% for July) — so AFq itself
+  isn't wrong, PokerTracker's own per-street report just doesn't use it.
+  Kept distinct from "Agg% (DriveHUD)" (both folds AND checks included)
+  reported alongside it, and from this app's existing Aggression Factor
+  (a ratio, bets+raises over calls, folds and checks all excluded) — a
+  genuinely different question (how aggressive vs. passive a player's
+  postflop volume is, not a per-street breakdown of it) that isn't meant
+  to be directly compared to either percentage.
+- **An August 2026 comparison against that same PokerTracker report
+  surfaced a separate, unresolved discrepancy worth flagging: this
+  database had 23,723 hero hands for August vs. PokerTracker's reported
+  15,125** — bomb pots don't explain it (only 1,081 of the extra ~8,600).
+  July's gap is much smaller (17,655 vs. 17,427) and squares with the
+  Agg% (PT) numbers matching almost exactly that month specifically —
+  strongly suggesting August's residual Agg% (PT) gap is a population
+  difference (a different set of hands being compared), not a formula
+  error, but the root cause of the August hand-count gap itself hasn't
+  been investigated yet.
 - **The "opportunities" count can exceed the number of times a street was
   seen** — this looks like it should be a bug at first glance (this
   project's own flop opportunities came out higher than hands that saw a

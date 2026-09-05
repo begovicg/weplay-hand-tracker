@@ -36,4 +36,7 @@ contextBridge.exposeInMainWorld('weplayConverter', {
   // callback receives { running, folderPath, added, updated, skipped,
   // filesProcessed, errors }.
   onLiveSyncStatus: (callback) => ipcRenderer.on('live-sync-status', (event, payload) => callback(payload)),
+  startHudOverlay: () => ipcRenderer.invoke('start-hud-overlay'),
+  stopHudOverlay: () => ipcRenderer.invoke('stop-hud-overlay'),
+  getHudOverlayState: () => ipcRenderer.invoke('get-hud-overlay-state'),
 });

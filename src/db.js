@@ -116,6 +116,29 @@ CREATE TABLE IF NOT EXISTS hand_players (
   faced_three_bet_opportunity INTEGER,
   postflop_agg_count     INTEGER,
   postflop_agg_denom     INTEGER,
+  -- Live-HUD opportunity denominators (see getLiveHudStats in
+  -- handStore.js): every "made" flag above already had a column: what was
+  -- missing was its own opportunity count, which only ever lived inside
+  -- analyzeHand's in-memory result. Booleans (0/1), except the three
+  -- check_raise_opportunity_* columns, which carry analyzeHand's raw
+  -- checkRaiseByStreet[street].opp count (can exceed 1 within a single
+  -- hand — see that field's own comment in stats.js).
+  rfi_opportunity        INTEGER,
+  cold_call_opportunity  INTEGER,
+  had_three_bet_opportunity_after_opening INTEGER,
+  faced_four_bet_opportunity INTEGER,
+  squeeze_opportunity    INTEGER,
+  steal_opportunity      INTEGER,
+  steal_defense_opportunity INTEGER,
+  cbet_opportunity_flop  INTEGER,
+  cbet_opportunity_turn  INTEGER,
+  cbet_opportunity_river INTEGER,
+  faced_cbet_opportunity_flop  INTEGER,
+  faced_cbet_opportunity_turn  INTEGER,
+  faced_cbet_opportunity_river INTEGER,
+  check_raise_opportunity_flop  INTEGER,
+  check_raise_opportunity_turn  INTEGER,
+  check_raise_opportunity_river INTEGER,
   PRIMARY KEY (hand_id, player_name)
 ) WITHOUT ROWID;
 
@@ -169,6 +192,11 @@ function openDatabase(filePath) {
     'check_raise_flop', 'check_raise_turn', 'check_raise_river',
     'won_at_showdown', 'won_when_saw_flop',
     'faced_three_bet_opportunity', 'postflop_agg_count', 'postflop_agg_denom',
+    'rfi_opportunity', 'cold_call_opportunity', 'had_three_bet_opportunity_after_opening',
+    'faced_four_bet_opportunity', 'squeeze_opportunity', 'steal_opportunity', 'steal_defense_opportunity',
+    'cbet_opportunity_flop', 'cbet_opportunity_turn', 'cbet_opportunity_river',
+    'faced_cbet_opportunity_flop', 'faced_cbet_opportunity_turn', 'faced_cbet_opportunity_river',
+    'check_raise_opportunity_flop', 'check_raise_opportunity_turn', 'check_raise_opportunity_river',
   ]) {
     ensureColumn(db, 'hand_players', col, 'INTEGER');
   }

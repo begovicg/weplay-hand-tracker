@@ -1,0 +1,72 @@
+/* The overlay window itself is transparent (see src/hudOverlay.js's
+   BrowserWindow options) — html/body must stay transparent too, or the
+   Electron default white background shows through as an opaque rectangle
+   sitting on top of the real Weplay table underneath. */
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+#hudRoot {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.hud-seat {
+  position: absolute;
+  transform: translate(-50%, -50%);
+}
+
+.hud {
+  display: inline-block;
+  background: rgba(9, 17, 19, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 6px;
+  padding: 4px 5px 3px;
+  box-shadow: 0 6px 16px -8px rgba(0, 0, 0, 0.65);
+}
+.hud.provisional { border-style: dashed; }
+.hud.unknown { opacity: 0.6; }
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0 7px;
+}
+.stat-cell { padding: 1px 0; text-align: center; }
+.stat-cell .v {
+  font-family: 'Consolas', 'IBM Plex Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.stat-cell .k {
+  font-size: 6.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #8b94a0;
+  text-transform: uppercase;
+  display: block;
+  margin-top: -1px;
+}
+
+.hud-rule { height: 1px; background: rgba(255, 255, 255, 0.08); margin: 3px 0; }
+.hud-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: 'Consolas', 'IBM Plex Mono', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 8px;
+  color: #8b94a0;
+}
+.hud-foot b { color: #cfd6dc; font-weight: 600; }

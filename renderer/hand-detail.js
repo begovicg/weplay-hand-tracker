@@ -86,15 +86,35 @@ function renderQuickStat(stats) {
   return `${stats.vpip}/${stats.pfr}/${three} <small>(${stats.hands})</small>`;
 }
 
+// Every seated player NOT in this set was still active when the flop was
+// dealt — i.e. saw postflop — reusing the timeline's own 'street'/'flop'
+// snapshot (already tracks exactly this via foldedSoFar) rather than
+// re-deriving fold order from the action log a second time. Returns null
+// when no flop was ever dealt (everyone folded preflop) or for a bomb pot
+// — see renderPlayers' own comment for why bomb pots are excluded: every
+// seated player posts an ante straight into a dealt flop with no preflop
+// betting round at all, so "who saw the flop" there is just "everyone,"
+// not a meaningful distinction to highlight.
+function namesFoldedBeforeFlop(replay) {
+  if (!replay.timeline || replay.tableType === 'bombpot') return null;
+  const flopStep = replay.timeline.find((t) => t.kind === 'street' && t.street === 'flop' && t.run === 1);
+  return flopStep ? new Set(flopStep.foldedSoFar) : null;
+}
+
 function renderPlayers(replay, statsByName) {
-  const rows = replay.players.map((p) => `
-    <div class="hd-player-row${p.isHero ? ' hero' : ''}">
+  const foldedBeforeFlop = namesFoldedBeforeFlop(replay);
+  const rows = replay.players.map((p) => {
+    const sawPostflop = !p.isHero && foldedBeforeFlop != null && !foldedBeforeFlop.has(p.name);
+    const rowClass = p.isHero ? ' hero' : (sawPostflop ? ' saw-postflop' : '');
+    return `
+    <div class="hd-player-row${rowClass}">
       <span class="hd-col-pos">${escapeHtml(p.position)}</span>
       <span class="hd-col-name">${escapeHtml(p.name)}${p.isHero ? ' <span class="hd-hero-tag">Hero</span>' : ''}</span>
       <span class="hd-col-stack-usd">$${p.stackUSD.toFixed(2)}</span>
       <span class="hd-col-stack-bb">${p.stackBB} BB</span>
       <span class="hd-col-stat" title="VPIP/PFR/3-Bet (hands)">${renderQuickStat(statsByName[p.name])}</span>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   return `<div class="hd-players">
     <div class="hd-player-row-head">
       <span class="hd-col-pos">Pos</span><span class="hd-col-name">Player</span><span class="hd-col-stack-usd">Stack $</span><span class="hd-col-stack-bb">Stack BB</span><span class="hd-col-stat">VPIP/PFR/3B</span>

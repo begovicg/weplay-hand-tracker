@@ -8,7 +8,7 @@ const { openDatabase } = require('../src/db');
 const {
   buildHandRecords, importFileIntoStore, queryHands, getDistinctValues, getHandById,
   queryRawHandsForStats, getTotalHandCount, backfillDeepStats, backfillEVAdjustments,
-  setHandStarred,
+  setHandStarred, getLiveHudStats,
 } = require('../src/handStore');
 const { splitHands } = require('../src/converter');
 const { analyzeHand } = require('../src/stats');
@@ -924,6 +924,117 @@ test('setHandStarred: a star survives re-importing the same hand (the real Live 
 
   const hand = queryHands(db, {}).hands.find((h) => h.handId === '100');
   assert.strictEqual(hand.starred, true, 're-importing the same hand must not reset an existing star');
+});
+
+// ── getLiveHudStats ──────────────────────────────────────────────────────
+// A bomb-pot hand where PlayerB (not hero) posts an ante and bets the flop
+// uncontested — reused deliberately in HAND_BOMB_POT's own style (see that
+// fixture above) so the only thing under test here is scoping, not a new
+// parsing scenario. PlayerB has no preflop decision at all (bomb pots skip
+// straight to the flop), so this hand must NOT count toward PlayerB's
+// nonBomb-scoped denominators (VPIP/PFR/RFI), but its flop bet must still
+// land in Agg%'s numerator/denominator — see getLiveHudStats' own comment
+// in src/handStore.js for why those two stats are scoped differently.
+const HAND_BOMB_POT_PB = `Weplay Hand #304:  Hold'em No Limit ($0.25/$0.50) - 2026/07/08 14:00:00 UTC
+Table 'Bomb Pot'(111) 6-max Seat #1 is the button
+Seat 1: PlayerB ($50 in chips)
+Seat 2: Hero ($50 in chips)
+PlayerB: posts the ante $1.5
+Hero: posts the ante $1.5
+*** HOLE CARDS ***
+Dealt to Hero [2c 7d]
+*** FLOP *** [Ah Kh Qh]
+PlayerB: bets $1
+Hero: folds
+Uncalled bet ($1) returned to PlayerB
+*** SHOW DOWN ***
+PlayerB collected $3 from pot
+*** SUMMARY ***
+Total pot $3 | Rake $0
+Seat 1: PlayerB collected ($3)
+Seat 2: Hero folded on the Flop`;
+
+test('getLiveHudStats: VPIP/PFR/RFI stay scoped to non-bomb hands, while Agg% pulls in bomb-pot postflop action too', () => {
+  const { db } = tmpDb();
+  // HAND_B (PlayerB opens preflop, uncontested — a genuine RFI) and HAND_C
+  // (PlayerB folds their SB at an equally unopened pot — an RFI opportunity
+  // declined) are the two real, already-defined non-bomb hands PlayerB is
+  // seated in above; HAND_BOMB_POT_PB adds a third, bomb-pot hand.
+  importFileIntoStore(db, `${HAND_B}\n\n${HAND_C}\n\n${HAND_BOMB_POT_PB}`, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const stats = getLiveHudStats(db, ['PlayerB']).PlayerB;
+  assert.ok(stats, 'PlayerB has rows in the database');
+  assert.strictEqual(stats.hands, 3, 'sample size counts every hand PlayerB was seated in, bomb pot included');
+  assert.strictEqual(stats.vpip, 50, 'VPIP denominator is the 2 non-bomb hands only — PlayerB voluntarily played 1 of them (HAND_B)');
+  assert.strictEqual(stats.pfr, 50, 'same 2-hand non-bomb denominator — PlayerB raised in 1 of them');
+  assert.strictEqual(stats.rfi, 50, 'RFI: opened HAND_B, declined the same opportunity in HAND_C, bomb pot has no preflop at all so cannot contribute either way');
+  assert.strictEqual(stats.aggPct, 100, 'Agg% stays on ALL hands — PlayerB\'s only postflop action anywhere is the bomb-pot flop bet, a 1-for-1 aggressive frequency');
+});
+
+// A 3-max hand where PlayerB opens from the button (a genuine RFI from late
+// position — a steal attempt too), then folds when Hero re-raises. Mirrors
+// stats.test.js's own HAND_HERO_OPENS_AND_3BETS_FOLDS shape exactly, just
+// with PlayerB in the role under test instead of Hero — see that fixture
+// for why this specific action sequence (open, 3-bet, fold) is what
+// produces both hadThreeBetOpportunityAfterOpening and foldedToThreeBet.
+const HAND_PB_OPENS_3BET_FOLD = `Weplay Hand #305:  Hold'em No Limit ($0.25/$0.50) - 2026/07/09 10:00:00 UTC
+Table 'Test'(111) 6-max Seat #1 is the button
+Seat 1: PlayerB ($50 in chips)
+Seat 2: Hero ($50 in chips)
+Seat 3: PlayerC ($50 in chips)
+PlayerC: posts small blind $0.25
+Hero: posts big blind $0.50
+*** HOLE CARDS ***
+Dealt to Hero [Ah Kh]
+PlayerB: raises $1.5 to $1.5
+PlayerC: folds
+Hero: raises $4.5 to $4.5
+PlayerB: folds
+Uncalled bet ($1) returned to Hero
+*** SHOW DOWN ***
+Hero collected $6.75 from pot
+*** SUMMARY ***
+Total pot $6.75 | Rake $0
+Seat 1: PlayerB folded before Flop
+Seat 2: Hero (big blind) collected ($6.75)
+Seat 3: PlayerC (small blind) folded before Flop`;
+
+test('getLiveHudStats: Fold to 3-Bet% and ATS% — the two newly-migrated opportunity columns — compute correctly from a real open-and-get-3-bet hand', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_PB_OPENS_3BET_FOLD, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  const stats = getLiveHudStats(db, ['PlayerB']).PlayerB;
+  assert.strictEqual(stats.hands, 1);
+  assert.strictEqual(stats.rfi, 100, 'PlayerB opened an unopened pot from the button');
+  assert.strictEqual(stats.attemptSteal, 100, 'the button is a steal position — the same open also counts as an attempted steal');
+  assert.strictEqual(stats.foldToThreeBet, 100, "PlayerB's own open got re-raised, and they folded to it");
+  assert.strictEqual(stats.threeBet, null, 'PlayerB was never facing exactly one prior raise themselves, so 3-Bet% has no denominator here');
+});
+
+test('backfillDeepStats: also backfills the live-HUD opportunity columns for a database imported before they existed', () => {
+  const { db } = tmpDb();
+  importFileIntoStore(db, HAND_PB_OPENS_3BET_FOLD, 'file1.txt', { replaceHeroName: true }, splitHands);
+
+  // Simulate "imported before this migration" — exactly what ALTER TABLE
+  // ADD COLUMN leaves behind on a database that already had this row.
+  db.exec(`UPDATE hand_players SET
+    rfi_opportunity = NULL, had_three_bet_opportunity_after_opening = NULL, steal_opportunity = NULL
+    WHERE player_name = 'PlayerB'`);
+
+  const before = getLiveHudStats(db, ['PlayerB']).PlayerB;
+  assert.strictEqual(before.rfi, null, 'a NULL opportunity denominator produces no rate, not a false zero');
+  assert.strictEqual(before.foldToThreeBet, null);
+  assert.strictEqual(before.attemptSteal, null);
+
+  const backfilled = backfillDeepStats(db, analyzeHand);
+  assert.ok(backfilled > 0);
+
+  const after = getLiveHudStats(db, ['PlayerB']).PlayerB;
+  assert.strictEqual(after.rfi, 100, 'matches the fresh-import result from the test above');
+  assert.strictEqual(after.foldToThreeBet, 100);
+  assert.strictEqual(after.attemptSteal, 100);
+
+  assert.strictEqual(backfillDeepStats(db, analyzeHand), 0, 'idempotent, same as every other backfillDeepStats gap');
 });
 
 console.log(`\n${passed} test(s) passed.`);

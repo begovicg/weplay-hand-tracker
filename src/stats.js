@@ -280,17 +280,16 @@ function analyzeHand(block, heroNameOverride) {
   let inHandThisFar = true;
   let postflopAggressive = 0; // hero's bets + raises, flop/turn/river
   let postflopCalls = 0;
-  // Per-street aggression uses Aggression Frequency (AFq): (bets+raises) /
-  // (bets+raises+calls+folds), checks excluded from the denominator. This
-  // app briefly switched to DriveHUD's "Agg%" (checks included) after an
-  // investigation into why numbers looked high, but AFq is what
-  // PokerTracker itself documents and is the dominant, most consistently
-  // documented convention across independent sources (PokerTracker's own
-  // forum, Upswing Poker, poker terminology glossaries, community
-  // discussion) — reverted back to it per explicit instruction. Checks are
-  // still tracked below (streetAgg[street].checks) since other call sites
-  // may want the raw count, but they no longer count toward the
-  // opportunities denominator — see streetAggPct() in aggregateStats.
+  // Raw per-street action counts (bets+raises, calls, folds, checks) — every
+  // one is tracked here regardless of which ends up counting toward which
+  // aggregate formula; aggregateStats' streetAggPct() is where that
+  // decision actually gets made (and has changed twice now: textbook
+  // Aggression Frequency, then DriveHUD's Agg%, then back to textbook AFq,
+  // then finally to a folds-excluded/checks-included formula verified
+  // against a real PokerTracker 4 report — see streetAggPct's own comment
+  // for the full history and why). Nothing here needs to change to support
+  // any of those — this object just records what actually happened on each
+  // street.
   const streetAgg = {
     FLOP: { agg: 0, calls: 0, folds: 0, checks: 0 },
     TURN: { agg: 0, calls: 0, folds: 0, checks: 0 },
@@ -931,24 +930,25 @@ function aggregateStats(allHands) {
   const totalAggressive = sum(allHands, (h) => h.postflopAggressive);
   const totalPostflopCalls = sum(allHands, (h) => h.postflopCalls);
 
-  // Per-street Aggression Frequency (AFq, PokerTracker's convention) —
-  // bets+raises over bets+raises+calls+folds, checks excluded from the
-  // denominator. See analyzeHand's streetAgg comment for why this is the
-  // formula in use, and how it's a different question from the aggregate
-  // Aggression Factor above (a ratio, not a frequency). Summed the same
-  // way everything else here is: across every hand, not just hands that
-  // reached that street (a hand that folded preflop contributes zero to
-  // every street's numbers, exactly as it should — it never had a flop
-  // decision to be aggressive or passive about).
-  // Agg% (DriveHUD's convention) alongside AFq — same underlying counts,
-  // checks included in the denominator instead of excluded. Reported
-  // side by side rather than picking one: AFq is what PokerTracker itself
-  // documents and is the more consistently cited convention (see AFq's own
-  // comment above), but checks-excluded-vs-included is purely a denominator
-  // choice, not a correctness question, and the gap between the two for the
-  // same actions is large enough (confirmed against real data: a real
-  // batch's flop AFq of ~50% is the same underlying play as a ~26% Agg%)
-  // that seeing both is more useful than silently picking a side.
+  // Per-street "PT Agg%" — bets+raises over bets+raises+calls+checks, FOLDS
+  // excluded from the denominator. Verified directly against a real
+  // PokerTracker 4 report (its "HM F/T/R Agg%" columns — PT4 borrows
+  // Hold'em Manager's own per-street convention for this specific
+  // breakdown) generated from this app's own CoinPoker-converted export:
+  // once compared over a month where this database's hand count matched
+  // PokerTracker's own (July 2026), this formula landed within ~1.5 points
+  // of PokerTracker's own 25.7/32.5/32.5 on every street. The formula this
+  // app used here before — bets+raises over bets+raises+calls+FOLDS,
+  // checks excluded — is the textbook definition of AFq (and still
+  // correct: summed across all three streets it matches PokerTracker's own
+  // aggregate "Total AFq" column almost exactly, 45.2% vs its reported
+  // 45.27%), but PokerTracker's own PER-STREET report apparently does not
+  // use that same formula, so applying it per street was off by roughly 15
+  // points versus real PokerTracker output. Not renamed to "AFq" here
+  // despite the fix, since folds-excluded/checks-included isn't the
+  // textbook AFq definition either — it's specifically PokerTracker's own
+  // per-street convention, kept distinct from Agg% (DriveHUD's convention,
+  // both folds AND checks included) reported alongside it below.
   function streetAggPct(streetKey) {
     let agg = 0, calls = 0, folds = 0, checks = 0;
     for (const h of allHands) {
@@ -958,8 +958,8 @@ function aggregateStats(allHands) {
       folds += h.streetAgg[streetKey].folds;
       checks += h.streetAgg[streetKey].checks;
     }
-    const opportunities = agg + calls + folds;
-    const aggPctOpportunities = opportunities + checks;
+    const opportunities = agg + calls + checks;
+    const aggPctOpportunities = agg + calls + folds + checks;
     return {
       pct: opportunities > 0 ? (agg / opportunities) * 100 : null,
       opportunities,
@@ -991,8 +991,9 @@ function aggregateStats(allHands) {
   // C-Bet%: (times continuation-bet) / (times hero was the previous
   // street's aggressor with no bet yet in front of them) — see
   // analyzeHand's cbetOpportunity comment. Uses allHands, not nonBomb, the
-  // same as the AFq stats above — a bomb pot has no preflop round so never
-  // creates a flop c-bet opportunity, but flop/turn aggression carrying
+  // same as the per-street aggression stats above — a bomb pot has no
+  // preflop round so never creates a flop c-bet opportunity, but flop/turn
+  // aggression carrying
   // into a turn/river c-bet is a real, well-defined question regardless.
   function cbetPct(streetKey) {
     const madeCount = allHands.filter((h) => h.cbetMade && h.cbetMade[streetKey]).length;

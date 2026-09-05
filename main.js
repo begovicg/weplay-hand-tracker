@@ -18,6 +18,7 @@ const { migrateJsonStoreIfPresent } = require('./src/migrateJsonStore');
 const { buildHandReplay } = require('./src/handReplay');
 const { analyzeHand, aggregateStats } = require('./src/stats');
 const { splitHands } = require('./src/converter');
+const { startHudOverlay, stopHudOverlay, isHudOverlayRunning } = require('./src/hudOverlay');
 
 // Auto-reload during development
 if (process.env.NODE_ENV !== 'production') {
@@ -104,6 +105,7 @@ function stopLiveSync() {
 function closeDb() {
   stopBackfillWorker();
   stopLiveSync(); // its own separate DB connection (see liveSyncWorker.js) would otherwise outlive this one closing/swapping underneath it
+  stopHudOverlay(); // holds no DB connection of its own, but reads via getDb() on every tick — nothing left to read from once this closes
   if (db) {
     try { db.close(); } catch (err) { /* already closed or unusable, nothing to do */ }
     db = null;
@@ -154,6 +156,16 @@ function resumeLiveSyncIfEnabled() {
   const folderPath = getSetting(database, 'liveSyncFolder');
   const enabled = getSetting(database, 'liveSyncEnabled') === '1';
   if (enabled && folderPath && fs.existsSync(folderPath)) beginLiveSync(folderPath);
+}
+
+// Same persisted-toggle shape as Live Sync above — resumes automatically on
+// the next launch if it was left on. Unlike Live Sync, this doesn't need
+// its own worker thread (see src/hudOverlay.js's own comment for why: it
+// only ever reads, on a plain interval, never a long synchronous import
+// batch that could block the window).
+function resumeHudOverlayIfEnabled() {
+  const database = getDb();
+  if (getSetting(database, 'hudOverlayEnabled') === '1') startHudOverlay(getDb);
 }
 
 // Confirms a file is actually a Weplay Hand Tracker database (has the two
@@ -269,6 +281,7 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
   resumeLiveSyncIfEnabled();
+  resumeHudOverlayIfEnabled();
 });
 
 app.on('window-all-closed', () => {
@@ -277,6 +290,17 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow();
 });
+// Live Sync and the backfill worker are Node worker_threads — genuine
+// threads inside this same process, so they die on their own the instant
+// the process exits, nothing to clean up. The HUD overlay's window-finder
+// server (src/windowFinder.js) is different: a real separate OS process
+// (powershell.exe), which Windows does NOT kill automatically just because
+// the process that spawned it exits. Without this, quitting the app while
+// the HUD was running left that process orphaned in the background
+// forever — stopHudOverlay() (which also tears down the overlay
+// BrowserWindows and the refresh timer) is a no-op if the HUD was never
+// started, so this is safe to call unconditionally on every quit.
+app.on('before-quit', () => stopHudOverlay());
 
 // ── IPC: app version (so the UI can show it, and so mismatched-build issues
 // like "I downloaded a new zip but it looks like the old version" are
@@ -472,6 +496,32 @@ ipcMain.handle('get-live-sync-state', async () => {
     folderPath: getSetting(database, 'liveSyncFolder'),
   };
 });
+
+// ── IPC: the on-table HUD overlay (src/hudOverlay.js) ────────────────────
+// Reuses whatever folder Live Sync is already pointed at (src/hudOverlay.js
+// reads the 'liveSyncFolder' setting itself) rather than asking for a
+// second folder pick — the HUD needs the exact same live hand-history
+// files Live Sync already watches, so there's nothing else to configure
+// here beyond on/off.
+
+ipcMain.handle('start-hud-overlay', async () => {
+  const database = getDb();
+  if (!getSetting(database, 'liveSyncFolder')) {
+    return { running: false, error: 'Turn on Live Sync first — the HUD reads the same live hand-history files.' };
+  }
+  setSetting(database, 'hudOverlayEnabled', '1');
+  startHudOverlay(getDb);
+  return { running: true };
+});
+
+ipcMain.handle('stop-hud-overlay', async () => {
+  const database = getDb();
+  setSetting(database, 'hudOverlayEnabled', '0');
+  stopHudOverlay();
+  return { running: false };
+});
+
+ipcMain.handle('get-hud-overlay-state', async () => ({ running: isHudOverlayRunning() }));
 
 // The Refresh Now button's actual "go check the folder right now" request
 // — distinct from a plain UI re-fetch (query-hands etc. against whatever's
